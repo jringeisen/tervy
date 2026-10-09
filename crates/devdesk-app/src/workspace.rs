@@ -5,6 +5,7 @@ use devdesk_core::config::{Config, Project};
 use devdesk_core::supervisor::{
     Command as CoreCommand, CoreEvent, SessionId, SessionInfo, SessionStatus, SupervisorHandle,
 };
+use devdesk_core::{agent, layout};
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -44,6 +45,11 @@ struct ShellTab {
     open: bool,
 }
 #[derive(Clone)]
+enum RemovalTarget {
+    Project(String),
+    Session(SessionId),
+}
+#[derive(Clone)]
 enum PaletteAction {
     Project(String),
     New,
@@ -56,15 +62,22 @@ enum PaletteAction {
     StartAll(String),
     StopAll(String),
     Recover,
+    LaunchClaude(bool),
+    ResumeAgent(SessionId),
 }
 
 pub struct Workspace {
     focus: FocusHandle,
+    restoring: bool,
+    last_layout: Option<layout::Layout>,
+    approvals: usize,
     stress: Option<crate::m2_perf::ManyProbe>,
     core: SupervisorHandle,
     config: Config,
     projects: Vec<Project>,
     tabs: BTreeMap<SessionId, ShellTab>,
+    // Session IDs change on restore; presentation order follows saved identities.
+    tab_order: Vec<SessionId>,
     active_project: Option<String>,
     selected: BTreeMap<String, SessionId>,
     expanded: BTreeSet<String>,
@@ -122,6 +135,10 @@ impl Workspace {
                     this.start_stress();
                     return;
                 }
+                if this.restoring {
+                    this.core.send(CoreCommand::Restore);
+                    return;
+                }
                 if !this.empty_control()
                     && let Some(project) = this.active_project.clone()
                 {
@@ -131,12 +148,16 @@ impl Workspace {
         });
         Self {
             focus,
+            restoring: std::env::var_os("DEVDESK_PERF_LAYOUT").is_none(),
+            last_layout: None,
+            approvals: 0,
             stress: (std::env::var("DEVDESK_PERF_LAYOUT").as_deref() == Ok("many"))
                 .then(crate::m2_perf::ManyProbe::new),
             core,
             config: Config::default(),
             projects: vec![],
             tabs: BTreeMap::new(),
+            tab_order: vec![],
             active_project: None,
             selected: BTreeMap::new(),
             expanded: BTreeSet::new(),
@@ -168,14 +189,78 @@ impl Workspace {
             .copied()
     }
     fn project_tabs(&self) -> Vec<SessionId> {
-        self.tabs
+        self.tab_order
             .iter()
-            .filter(|(_, tab)| tab.open && Some(&tab.info.project) == self.active_project.as_ref())
-            .map(|(id, _)| *id)
+            .copied()
+            .filter(|id| {
+                self.tabs.get(id).is_some_and(|tab| {
+                    tab.open && Some(&tab.info.project) == self.active_project.as_ref()
+                })
+            })
             .collect()
     }
     fn event(&mut self, event: CoreEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            CoreEvent::Restored {
+                saved,
+                layout,
+                keys,
+            } => {
+                if saved {
+                    let mut order: Vec<_> = layout
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| keys.get(&tab.key).copied())
+                        .collect();
+                    for id in &self.tab_order {
+                        if !order.contains(id) {
+                            order.push(*id);
+                        }
+                    }
+                    self.tab_order = order;
+                    for tab in self.tabs.values_mut() {
+                        tab.open = false;
+                    }
+                    for saved_tab in &layout.tabs {
+                        if let Some(tab) = keys
+                            .get(&saved_tab.key)
+                            .and_then(|id| self.tabs.get_mut(id))
+                        {
+                            tab.open = saved_tab.open;
+                        }
+                    }
+                    self.expanded = layout.expanded.into_iter().collect();
+                    self.active_project = layout
+                        .active_project
+                        .filter(|id| self.projects.iter().any(|project| project.id == *id));
+                    self.selected.clear();
+                    for key in layout.selected {
+                        if let Some(id) = keys.get(&key)
+                            && let Some(tab) = self.tabs.get(id)
+                            && tab.open
+                        {
+                            self.selected.insert(tab.info.project.clone(), *id);
+                        }
+                    }
+                }
+                self.restoring = false;
+                if self.active_project.is_none() {
+                    self.active_project = self.projects.first().map(|project| project.id.clone());
+                }
+                if let Some(project) = self.active_project.clone() {
+                    if saved {
+                        self.core.send(CoreCommand::ProjectOpened(project.clone()));
+                        if !self.selected.contains_key(&project)
+                            && let Some(id) = self.project_tabs().first().copied()
+                        {
+                            self.selected.insert(project, id);
+                        }
+                        self.update_visibility(window, cx);
+                    } else {
+                        self.open_project(project, window, cx);
+                    }
+                }
+            }
             CoreEvent::Orphans(orphans) => {
                 let summary = orphans
                     .iter()
@@ -218,6 +303,7 @@ impl Workspace {
                         self.start_stress();
                     }
                 } else if self.active_project.is_none()
+                    && !self.restoring
                     && !self.empty_control()
                     && let Some(project) = self.projects.first()
                 {
@@ -226,10 +312,35 @@ impl Workspace {
             }
             CoreEvent::ConfigError(error) => self.error = Some(error),
             CoreEvent::ProjectAdded(project) => self.open_project(project, window, cx),
+            CoreEvent::ProjectRemoved(project) => {
+                self.projects.retain(|p| p.id != project);
+                self.expanded.remove(&project);
+                self.selected.remove(&project);
+                for tab in self
+                    .tabs
+                    .values_mut()
+                    .filter(|tab| tab.info.project == project)
+                {
+                    tab.open = false;
+                }
+                if self.active_project.as_ref() == Some(&project) {
+                    self.active_project = self.projects.first().map(|p| p.id.clone());
+                }
+                self.update_visibility(window, cx);
+            }
             CoreEvent::SessionChanged(info) => {
                 if let Some(tab) = self.tabs.get_mut(&info.id) {
-                    tab.view
-                        .update(cx, |view, cx| view.set_status(&info.status, cx));
+                    tab.view.update(cx, |view, cx| {
+                        view.set_status(&info.status, cx);
+                        if info.agent.is_some()
+                            && matches!(
+                                info.status,
+                                SessionStatus::Stopped | SessionStatus::Exited { .. }
+                            )
+                        {
+                            view.set_agent_stub(cx);
+                        }
+                    });
                     tab.info = info;
                 } else {
                     self.pending.remove(&info.project);
@@ -242,19 +353,25 @@ impl Workspace {
                             &self.config.settings,
                         )
                     });
-                    view.update(cx, |view, cx| view.set_status(&info.status, cx));
+                    view.update(cx, |view, cx| {
+                        view.set_status(&info.status, cx);
+                        if info.agent.is_some()
+                            && matches!(
+                                info.status,
+                                SessionStatus::Stopped | SessionStatus::Exited { .. }
+                            )
+                        {
+                            view.set_agent_stub(cx);
+                        }
+                    });
                     let id = info.id;
-                    if info.process.is_none() {
+                    let open = info.agent.is_none()
+                        || !matches!(info.status, SessionStatus::Exited { .. });
+                    if info.process.is_none() && open {
                         self.selected.insert(info.project.clone(), id);
                     }
-                    self.tabs.insert(
-                        id,
-                        ShellTab {
-                            info,
-                            view,
-                            open: true,
-                        },
-                    );
+                    self.tab_order.push(id);
+                    self.tabs.insert(id, ShellTab { info, view, open });
                     self.update_visibility(window, cx);
                 }
             }
@@ -279,12 +396,23 @@ impl Workspace {
                 if let Some(tab) = self.tabs.get_mut(&info.id) {
                     tab.view.update(cx, |view, cx| {
                         view.attach(handle, events, warning, spawn_started, cx);
-                        view.set_status(&info.status, cx);
+                        {
+                            view.set_status(&info.status, cx);
+                            if info.agent.is_some()
+                                && matches!(
+                                    info.status,
+                                    SessionStatus::Stopped | SessionStatus::Exited { .. }
+                                )
+                            {
+                                view.set_agent_stub(cx);
+                            }
+                        };
                     });
                     tab.info = info;
                 }
             }
             CoreEvent::SessionClosed(id) => {
+                self.tab_order.retain(|candidate| *candidate != id);
                 if let Some(tab) = self.tabs.remove(&id)
                     && self.selected.get(&tab.info.project) == Some(&id)
                 {
@@ -336,7 +464,233 @@ impl Workspace {
                 cx.quit();
             }
         }
+        let approvals = self
+            .tabs
+            .values()
+            .filter(|tab| {
+                matches!(
+                    tab.info.status,
+                    SessionStatus::Starting | SessionStatus::Running
+                ) && tab
+                    .info
+                    .agent
+                    .as_ref()
+                    .is_some_and(|info| info.status == agent::Status::NeedsApproval)
+            })
+            .count();
+        if approvals != self.approvals {
+            self.approvals = approvals;
+            crate::badge::set(approvals);
+        }
+        self.save_layout();
         cx.notify();
+    }
+    fn confirm_remove(
+        &mut self,
+        target: RemovalTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.prompt_pending {
+            return;
+        }
+        let (name, detail) = match &target {
+            RemovalTarget::Project(id) => {
+                let Some(project) = self.projects.iter().find(|p| p.id == *id) else {
+                    return;
+                };
+                (
+                    project.name.clone(),
+                    "Stop this project's sessions and remove it from DevDesk. Files in its folder are kept.",
+                )
+            }
+            RemovalTarget::Session(id) => {
+                let Some(tab) = self.tabs.get(id) else {
+                    return;
+                };
+                (
+                    tab.info.name.clone(),
+                    if tab.info.agent.is_some() {
+                        "Stop this agent and remove its DevDesk entry. Claude's own saved conversation is kept."
+                    } else {
+                        "Stop this process and remove its definition from DevDesk's global config."
+                    },
+                )
+            }
+        };
+        self.prompt_pending = true;
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            &format!("Remove {name}?"),
+            Some(detail),
+            &["Cancel", "Remove"],
+            cx,
+        );
+        self._tasks.push(cx.spawn(async move |view, cx| {
+            let answer = answer.await;
+            let _ = view.update(cx, |this, _| {
+                this.prompt_pending = false;
+                if answer == Ok(1) {
+                    this.core.send(match target {
+                        RemovalTarget::Project(id) => CoreCommand::RemoveProject(id),
+                        RemovalTarget::Session(id) => CoreCommand::RemoveSession(id),
+                    });
+                }
+            });
+        }));
+    }
+    fn agent_rows(&self, project: &str, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let mut rows = v_flex()
+            .gap_1()
+            .child(div().pl_3().pt_2().text_xs().child("Agents"));
+        for (id, tab) in &self.tabs {
+            if tab.info.project != project {
+                continue;
+            }
+            let id = *id;
+            let Some(agent) = &tab.info.agent else {
+                continue;
+            };
+            let running = matches!(
+                tab.info.status,
+                SessionStatus::Starting | SessionStatus::Running | SessionStatus::Stopping
+            );
+            let status = if matches!(tab.info.status, SessionStatus::Stopping) {
+                "Stopping"
+            } else {
+                match agent.status {
+                    agent::Status::Launching => "Launching",
+                    agent::Status::Idle => "Idle",
+                    agent::Status::Working => "Working",
+                    agent::Status::NeedsApproval => "Needs approval",
+                    agent::Status::TurnFailed => "Turn failed",
+                    agent::Status::Exited => "Resume",
+                }
+            };
+            rows = rows.child(
+                h_flex()
+                    .pl_3()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .id(("agent", id.0))
+                            .flex_1()
+                            .text_sm()
+                            .cursor_pointer()
+                            .when(agent.status == agent::Status::NeedsApproval, |div| {
+                                div.text_color(theme.warning)
+                            })
+                            .child(
+                                div()
+                                    .text_color(match agent.status {
+                                        agent::Status::NeedsApproval
+                                        | agent::Status::TurnFailed => theme.warning,
+                                        agent::Status::Working | agent::Status::Launching => {
+                                            theme.primary
+                                        }
+                                        _ => theme.muted_foreground,
+                                    })
+                                    .child("●"),
+                            )
+                            .child(format!("{} · {status}", tab.info.name))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.choose_tab(id, window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("agent-toggle", id.0))
+                            .text_xs()
+                            .cursor_pointer()
+                            .child(if running { "Stop" } else { "Resume" })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.choose_tab(id, window, cx);
+                                this.core.send(if running {
+                                    CoreCommand::Stop(id)
+                                } else {
+                                    CoreCommand::ResumeAgent(id)
+                                });
+                            })),
+                    )
+                    .child(
+                        div()
+                            .id(("remove-agent", id.0))
+                            .text_xs()
+                            .cursor_pointer()
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.confirm_remove(RemovalTarget::Session(id), window, cx);
+                            })),
+                    ),
+            );
+        }
+        let project = project.to_string();
+        rows.child(
+            div()
+                .id(SharedString::from(format!("launch-claude-{project}")))
+                .pl_3()
+                .py_1()
+                .text_sm()
+                .cursor_pointer()
+                .child("+ Launch Claude")
+                .on_click(cx.listener(move |this, _, _, _| {
+                    this.core.send(CoreCommand::NewAgent {
+                        project: project.clone(),
+                        picker: false,
+                    })
+                })),
+        )
+        .into_any_element()
+    }
+    fn tab_key(tab: &ShellTab) -> String {
+        if let Some(agent) = &tab.info.agent {
+            format!("agent:{}", agent.record.id)
+        } else if let Some(process) = &tab.info.process {
+            format!("process:{}/{}", tab.info.project, process)
+        } else {
+            format!("shell:{}", tab.info.id.0)
+        }
+    }
+    fn save_layout(&mut self) {
+        if self.restoring || self.shutdown.is_some() || !self.perf_layout.is_empty() {
+            return;
+        }
+        let layout = layout::Layout {
+            active_project: self.active_project.clone(),
+            expanded: self.expanded.iter().cloned().collect(),
+            selected: self
+                .selected
+                .values()
+                .filter_map(|id| self.tabs.get(id))
+                .map(Self::tab_key)
+                .collect(),
+            tabs: self
+                .tab_order
+                .iter()
+                .filter_map(|id| self.tabs.get(id))
+                .filter(|tab| tab.open || tab.info.process.is_some() || tab.info.agent.is_some())
+                .map(|tab| layout::Tab {
+                    key: Self::tab_key(tab),
+                    project: tab.info.project.clone(),
+                    name: tab.info.name.clone(),
+                    kind: if let Some(agent) = &tab.info.agent {
+                        layout::Kind::Agent(agent.record.id.clone())
+                    } else if let Some(process) = &tab.info.process {
+                        layout::Kind::Process(process.clone())
+                    } else {
+                        layout::Kind::Shell
+                    },
+                    cwd: None,
+                    open: tab.open,
+                })
+                .collect(),
+        };
+        if self.last_layout.as_ref() != Some(&layout) {
+            self.last_layout = Some(layout.clone());
+            self.core.send(CoreCommand::SaveLayout(layout));
+        }
     }
     fn visible_ids(&self) -> Vec<SessionId> {
         let mut ids = self.active().into_iter().collect::<Vec<_>>();
@@ -503,12 +857,15 @@ impl Workspace {
         let started = std::env::var_os("DEVDESK_PERF_SWITCH").map(|_| std::time::Instant::now());
         self.expanded.insert(project.clone());
         self.active_project = Some(project.clone());
-        self.core.send(CoreCommand::ProjectOpened(project.clone()));
+        if self.ready {
+            self.core.send(CoreCommand::ProjectOpened(project.clone()));
+        }
         if self.ready
-            && !self
-                .tabs
-                .values()
-                .any(|tab| tab.info.project == project && tab.info.process.is_none())
+            && !self.tabs.values().any(|tab| {
+                tab.info.project == project
+                    && tab.info.process.is_none()
+                    && tab.info.agent.is_none()
+            })
             && !self.pending.contains(&project)
         {
             self.pending.insert(project.clone());
@@ -518,6 +875,7 @@ impl Workspace {
             });
         }
         self.update_visibility(window, cx);
+        self.save_layout();
         cx.notify();
         if let Some(started) = started {
             window.on_next_frame(move |_, _| {
@@ -534,6 +892,7 @@ impl Workspace {
             self.active_project = Some(tab.info.project.clone());
             self.selected.insert(tab.info.project.clone(), id);
             self.update_visibility(window, cx);
+            self.save_layout();
             cx.notify();
         }
     }
@@ -587,7 +946,7 @@ impl Workspace {
         let Some(tab) = self.tabs.get_mut(&id) else {
             return;
         };
-        if tab.info.process.is_none() {
+        if tab.info.process.is_none() && tab.info.agent.is_none() {
             // Shells stay visible until any foreground-job confirmation and
             // session cleanup complete. Processes keep a permanent core entry.
             return;
@@ -607,6 +966,7 @@ impl Workspace {
             }
         }
         self.update_visibility(window, cx);
+        self.save_layout();
         cx.notify();
     }
     fn add_project(&mut self, _: &AddProject, _: &mut Window, cx: &mut Context<Self>) {
@@ -687,6 +1047,20 @@ impl Workspace {
             )
         }));
         if let Some(project) = &self.active_project {
+            actions.push(("Launch Claude".into(), PaletteAction::LaunchClaude(false)));
+            actions.push((
+                "Resume other Claude session…".into(),
+                PaletteAction::LaunchClaude(true),
+            ));
+            for (id, tab) in &self.tabs {
+                if tab.info.project == *project && tab.info.agent.is_some() {
+                    actions.push((
+                        format!("Resume {}", tab.info.name),
+                        PaletteAction::ResumeAgent(*id),
+                    ));
+                    actions.push((format!("Stop {}", tab.info.name), PaletteAction::Stop(*id)));
+                }
+            }
             actions.push((
                 "Start All Processes".into(),
                 PaletteAction::StartAll(project.clone()),
@@ -734,6 +1108,18 @@ impl Workspace {
             PaletteAction::StartAll(project) => self.core.send(CoreCommand::StartAll(project)),
             PaletteAction::StopAll(project) => self.core.send(CoreCommand::StopAll(project)),
             PaletteAction::Recover => self.core.send(CoreCommand::ShowOrphans),
+            PaletteAction::LaunchClaude(picker) => {
+                if let Some(project) = &self.active_project {
+                    self.core.send(CoreCommand::NewAgent {
+                        project: project.clone(),
+                        picker,
+                    });
+                }
+            }
+            PaletteAction::ResumeAgent(id) => {
+                self.choose_tab(id, window, cx);
+                self.core.send(CoreCommand::ResumeAgent(id));
+            }
         }
         if self.rename.is_none() {
             self.restore_focus(window, cx);
@@ -743,6 +1129,10 @@ impl Workspace {
     pub fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.shutdown.is_some() || self.prompt_pending {
             return;
+        }
+        self.save_layout();
+        if let Some(layout) = self.last_layout.clone() {
+            self.core.send(CoreCommand::SaveLayout(layout));
         }
         let running: Vec<_> = self
             .tabs
@@ -825,6 +1215,7 @@ impl Render for Workspace {
         for project in &self.projects {
             let id = project.id.clone();
             let toggle_id = id.clone();
+            let remove_id = id.clone();
             let expanded = self.expanded.contains(&id);
             let selected = self.active_project.as_ref() == Some(&id);
             sidebar = sidebar.child(
@@ -839,6 +1230,7 @@ impl Render for Workspace {
                                 if !this.expanded.remove(&toggle_id) {
                                     this.expanded.insert(toggle_id.clone());
                                 }
+                                this.save_layout();
                                 cx.notify();
                             })),
                     )
@@ -854,6 +1246,20 @@ impl Render for Workspace {
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_project(id.clone(), window, cx)
                             })),
+                    )
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("remove-project-{remove_id}")))
+                            .cursor_pointer()
+                            .text_xs()
+                            .child("×")
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.confirm_remove(
+                                    RemovalTarget::Project(remove_id.clone()),
+                                    window,
+                                    cx,
+                                );
+                            })),
                     ),
             );
             if expanded {
@@ -862,6 +1268,9 @@ impl Render for Workspace {
                         continue;
                     }
                     let id = *id;
+                    if tab.info.agent.is_some() {
+                        continue;
+                    }
                     if tab.info.process.is_some() {
                         let running = matches!(
                             tab.info.status,
@@ -926,6 +1335,22 @@ impl Render for Workspace {
                                                 .on_click(cx.listener(move |this, _, _, _| {
                                                     this.core.send(CoreCommand::Restart(id))
                                                 })),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("remove-process", id.0))
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .child("×")
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.confirm_remove(
+                                                            RemovalTarget::Session(id),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    },
+                                                )),
                                         ),
                                 )
                                 .child(div().text_xs().text_color(muted).child(
@@ -951,6 +1376,7 @@ impl Render for Workspace {
                             })),
                     );
                 }
+                sidebar = sidebar.child(self.agent_rows(&project.id, cx));
             }
         }
         sidebar = sidebar.child(

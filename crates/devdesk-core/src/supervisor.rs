@@ -4,6 +4,10 @@
 use crate::config::{self, Config};
 use crate::env::ShellEnvironment;
 use crate::{
+    agent::{self, AgentProvider},
+    ipc, layout,
+};
+use crate::{
     process,
     store::{Orphan, Store},
 };
@@ -31,6 +35,7 @@ pub enum SessionStatus {
 }
 #[derive(Clone, Debug)]
 pub struct SessionInfo {
+    pub agent: Option<agent::Info>,
     pub process: Option<String>,
     pub config_changed: bool,
     pub pid: Option<u32>,
@@ -42,6 +47,15 @@ pub struct SessionInfo {
 }
 
 pub enum Command {
+    NewAgent {
+        project: String,
+        picker: bool,
+    },
+    ResumeAgent(SessionId),
+    RemoveSession(SessionId),
+    RemoveProject(String),
+    SaveLayout(layout::Layout),
+    Restore,
     NewShell {
         project: String,
         size: Dimensions,
@@ -69,10 +83,16 @@ pub enum Command {
     Shutdown,
 }
 pub enum CoreEvent {
+    Restored {
+        saved: bool,
+        layout: layout::Layout,
+        keys: BTreeMap<String, SessionId>,
+    },
     Orphans(Vec<Orphan>),
     Config(Config),
     ConfigError(String),
     ProjectAdded(String),
+    ProjectRemoved(String),
     SessionChanged(SessionInfo),
     SessionStarted {
         info: SessionInfo,
@@ -139,6 +159,7 @@ impl Drop for Supervisor {
 }
 
 enum Message {
+    HooksReady,
     Reaped {
         id: SessionId,
         launch: LaunchId,
@@ -202,6 +223,13 @@ impl StopPlan {
         plan.kill_after = plan.term_after + Duration::from_secs(3);
         plan
     }
+    fn for_agent(now: Duration) -> Self {
+        let mut stop = Self::new(now);
+        stop.first_signal = libc::SIGTERM;
+        stop.term_after = Duration::from_secs(3);
+        stop.kill_after = Duration::from_secs(3);
+        stop
+    }
     fn due_signal(&mut self, now: Duration) -> Option<i32> {
         let age = now.saturating_sub(self.started);
         let next = if age >= self.kill_after {
@@ -226,6 +254,8 @@ impl StopPlan {
     }
 }
 struct Entry {
+    agent: Option<agent::Runtime>,
+    cwd: Option<PathBuf>,
     process: Option<process::Runtime>,
     desired: Option<config::ProcessSpec>,
     history: Option<TerminalHandle>,
@@ -240,6 +270,12 @@ struct Entry {
     exited: bool,
 }
 struct Actor {
+    // Removal is permanent metadata deletion; close alone only dismisses a tab.
+    removing: BTreeSet<SessionId>,
+    hooks: Option<ipc::Server>,
+    layout_due: Option<Duration>,
+    pending_layout: Option<layout::Layout>,
+    restored: bool,
     store: Option<Store>,
     orphans: Vec<Orphan>,
     recovery_pending: bool,
@@ -267,6 +303,11 @@ impl Actor {
         events: async_channel::Sender<CoreEvent>,
     ) -> Self {
         Self {
+            removing: BTreeSet::new(),
+            hooks: None,
+            layout_due: None,
+            pending_layout: None,
+            restored: false,
             store: None,
             orphans: vec![],
             recovery_pending: false,
@@ -293,6 +334,7 @@ impl Actor {
     fn changed(&self, id: SessionId) {
         if let Some(entry) = self.entries.get(&id) {
             let mut info = entry.info.clone();
+            info.agent = entry.agent.as_ref().map(|runtime| runtime.info.clone());
             if let Some(process) = &entry.process {
                 info.status = process.state.clone();
             }
@@ -351,6 +393,20 @@ impl Actor {
                 ))),
             }
             self.load_config();
+            let sender = self.sender.clone();
+            match ipc::Server::bind(
+                self.path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new(".")),
+                move || {
+                    let _ = sender.send(Message::HooksReady);
+                },
+            ) {
+                Ok(server) => self.hooks = Some(server),
+                Err(error) => self.emit(CoreEvent::ConfigError(format!(
+                    "Hook server unavailable: {error}"
+                ))),
+            }
             if self.recovery_pending && !self.orphans.is_empty() {
                 self.emit(CoreEvent::Orphans(self.orphans.clone()));
             }
@@ -406,6 +462,7 @@ impl Actor {
                 )
                 .chain(self.orphan_check_at)
                 .chain(self.config_due)
+                .chain(self.layout_due)
                 .chain(self.shutdown_deadline)
                 .min();
             let message = match next {
@@ -427,6 +484,7 @@ impl Actor {
                 && self.entries.is_empty()
                 && self.orphan_check_at.is_none()
             {
+                self.flush_layout();
                 self.emit(CoreEvent::ShutdownComplete { clean: true });
                 break;
             }
@@ -446,6 +504,7 @@ impl Actor {
     }
     fn message(&mut self, message: Message) {
         match message {
+            Message::HooksReady => self.hook_messages(),
             Message::Reaped { id, launch, result } => {
                 if !self
                     .entries
@@ -468,6 +527,9 @@ impl Actor {
                         let entry = self.entries.get_mut(&id).expect("registered handoff");
                         entry.joining = false;
                         entry.info.status = SessionStatus::Failed(error.clone());
+                        if let Some(runtime) = &mut entry.agent {
+                            runtime.exited();
+                        }
                         if let Some(process) = &mut entry.process {
                             process.fail(error);
                             entry.restart = false;
@@ -530,6 +592,7 @@ impl Actor {
                             process.spawned(self.clock.now());
                             entry.info.status = process.state.clone();
                         }
+                        entry.info.agent = entry.agent.as_ref().map(|runtime| runtime.info.clone());
                         self.emit(CoreEvent::SessionStarted {
                             info: self.entries[&id].info.clone(),
                             handle,
@@ -543,11 +606,15 @@ impl Actor {
                         entry.exited = true;
                         entry.drained = true;
                         entry.info.status = SessionStatus::Failed(error.clone());
+                        if let Some(runtime) = &mut entry.agent {
+                            runtime.exited();
+                        }
                         if let Some(process) = &mut entry.process {
                             process.spawn_failed(error, self.clock.now());
                             entry.info.status = process.state.clone();
                         }
                         if entry.close {
+                            self.removing.remove(&id);
                             self.entries.remove(&id);
                             self.emit(CoreEvent::SessionClosed(id));
                         } else {
@@ -564,6 +631,9 @@ impl Actor {
                     match signal {
                         TerminalSignal::ChildExit(status) => {
                             entry.exited = true;
+                            if let Some(runtime) = &mut entry.agent {
+                                runtime.exited();
+                            }
                             if let Some(process) = &mut entry.process {
                                 process.exited(status.code());
                             }
@@ -576,7 +646,13 @@ impl Actor {
                             // those up even if the terminal never reaches EOF.
                             entry.stopping.get_or_insert_with(|| {
                                 entry.process.as_ref().map_or_else(
-                                    || StopPlan::new(self.clock.now()),
+                                    || {
+                                        if entry.agent.is_some() {
+                                            StopPlan::for_agent(self.clock.now())
+                                        } else {
+                                            StopPlan::new(self.clock.now())
+                                        }
+                                    },
                                     |process| {
                                         StopPlan::for_process(self.clock.now(), &process.spec)
                                     },
@@ -598,6 +674,29 @@ impl Actor {
             return;
         }
         match command {
+            Command::NewAgent { project, picker } => self.new_agent(project, picker),
+            Command::ResumeAgent(id) => self.resume_agent(id),
+            Command::RemoveSession(id) => self.remove_session(id),
+            Command::RemoveProject(project) => self.remove_project(project),
+            Command::SaveLayout(mut layout) => {
+                for tab in &mut layout.tabs {
+                    if matches!(tab.kind, layout::Kind::Shell)
+                        && let Some(entry) = self
+                            .entries
+                            .values()
+                            .find(|entry| self.key(entry) == tab.key)
+                    {
+                        tab.cwd = entry
+                            .session
+                            .as_ref()
+                            .and_then(|session| devdesk_term::kill::cwd(session.owned.leader).ok())
+                            .or_else(|| entry.cwd.clone());
+                    }
+                }
+                self.pending_layout = Some(layout);
+                self.layout_due = Some(self.clock.now() + Duration::from_millis(250));
+            }
+            Command::Restore => self.restore(),
             Command::Start(id) => self.start_process(id, true),
             Command::Stop(id) => self.stop(id, false, false),
             Command::StartAll(project) => {
@@ -685,11 +784,14 @@ impl Actor {
                 self.entries.insert(
                     id,
                     Entry {
+                        agent: None,
+                        cwd: None,
                         process: None,
                         desired: None,
                         history: None,
                         joining: false,
                         info: SessionInfo {
+                            agent: None,
                             process: None,
                             config_changed: false,
                             pid: None,
@@ -718,9 +820,19 @@ impl Actor {
                     .take(100)
                     .collect();
                 if !name.is_empty()
+                    && !self.removing.contains(&id)
                     && let Some(entry) = self.entries.get_mut(&id)
                 {
-                    entry.info.name = name;
+                    entry.info.name = name.clone();
+                    let record = entry.agent.as_mut().map(|runtime| {
+                        runtime.info.record.name = name;
+                        runtime.info.record.clone()
+                    });
+                    if let (Some(store), Some(record)) = (&self.store, record)
+                        && let Err(error) = store.save_agent(&record)
+                    {
+                        self.emit(CoreEvent::ConfigError(error));
+                    }
                     self.changed(id);
                 }
             }
@@ -728,7 +840,7 @@ impl Actor {
                 if self
                     .entries
                     .get(&id)
-                    .is_some_and(|entry| entry.process.is_some())
+                    .is_some_and(|entry| entry.process.is_some() || entry.agent.is_some())
                 {
                     self.stop(id, false, false);
                     return;
@@ -750,6 +862,14 @@ impl Actor {
                 }
             }
             Command::Restart(id) => {
+                if self
+                    .entries
+                    .get(&id)
+                    .is_some_and(|entry| entry.agent.is_some())
+                {
+                    self.resume_agent(id);
+                    return;
+                }
                 if self.entries.get(&id).is_some_and(|entry| {
                     entry.process.is_some()
                         && entry.session.is_none()
@@ -791,6 +911,10 @@ impl Actor {
                     entry.stopping = Some(plan);
                 }
             }
+            if entry.agent.is_some() && entry.stopping.as_ref().is_some_and(|stop| stop.stage == 0)
+            {
+                entry.stopping = Some(StopPlan::for_agent(self.clock.now()));
+            }
             self.changed(id);
         }
     }
@@ -802,6 +926,9 @@ impl Actor {
             entry.info.status = SessionStatus::Failed(error.clone());
             entry.exited = true;
             entry.drained = true;
+            if let Some(runtime) = &mut entry.agent {
+                runtime.exited();
+            }
             if let Some(process) = &mut entry.process {
                 process.fail(error);
             }
@@ -816,6 +943,9 @@ impl Actor {
             .find(|project| project.id == entry.info.project)
         else {
             entry.info.status = SessionStatus::Failed("Project was removed from config".into());
+            if let Some(runtime) = &mut entry.agent {
+                runtime.exited();
+            }
             if let Some(process) = &mut entry.process {
                 process.fail("Project was removed from config".into());
             }
@@ -863,7 +993,16 @@ impl Actor {
                 )
             })
             .unwrap_or_default();
-        let cwd = project.path.clone();
+        let cwd = entry.cwd.clone().unwrap_or_else(|| project.path.clone());
+        entry.cwd = Some(cwd.clone());
+        let agent_launch = entry.agent.as_ref().map(|runtime| {
+            (
+                runtime.info.record.clone(),
+                runtime.request.clone(),
+                runtime.token.clone(),
+            )
+        });
+        let socket = self.hooks.as_ref().map(|server| server.path.clone());
         let size = entry.size;
         let lines = self.config.settings.scrollback_lines;
         let launch = LaunchId(self.next_launch);
@@ -883,7 +1022,7 @@ impl Actor {
             .name("devdesk-spawn".into())
             .spawn(move || {
                 let environment = ShellEnvironment::shared();
-                let warning = environment.warning.clone();
+                let mut warning = environment.warning.clone();
                 let mut spawn_started = None;
                 let result = (|| {
                     let (program, args) = probe_command(
@@ -894,7 +1033,22 @@ impl Actor {
                         },
                         &environment,
                     )?;
-                    let mut spec = if let Some(process_spec) = &process_spec {
+                    let mut spec = if let Some((record, request, token)) = &agent_launch {
+                        agent::ClaudeProvider.build_launch(
+                            &agent::Context {
+                                record,
+                                request,
+                                launch: launch.0,
+                                token,
+                                socket: socket.as_deref().ok_or(
+                                    "Hook server unavailable; refusing untracked agent launch",
+                                )?,
+                                helper: &std::env::current_exe().map_err(|e| e.to_string())?,
+                                lines,
+                            },
+                            &environment,
+                        )?
+                    } else if let Some(process_spec) = &process_spec {
                         process::launch(&project, process_spec, &environment, lines)
                     } else {
                         SpawnSpec {
@@ -905,6 +1059,14 @@ impl Actor {
                             scrollback_lines: lines,
                         }
                     };
+                    if agent_launch.is_some()
+                        && let Some(version) = agent::version_warning(&spec.program, &environment)
+                    {
+                        warning = Some(warning.take().map_or_else(
+                            || version.clone(),
+                            |warning| format!("{warning}\n{version}"),
+                        ));
+                    }
                     let env = &mut spec.env;
                     env.insert("DEVDESK_SESSION_ID".into(), id.0.to_string());
                     env.insert("DEVDESK_LAUNCH_ID".into(), launch.0.to_string());
@@ -946,8 +1108,372 @@ impl Actor {
             });
         }
     }
+    fn key(&self, entry: &Entry) -> String {
+        if let Some(runtime) = &entry.agent {
+            format!("agent:{}", runtime.info.record.id)
+        } else if let Some(process) = &entry.info.process {
+            format!("process:{}/{}", entry.info.project, process)
+        } else {
+            format!("shell:{}", entry.info.id.0)
+        }
+    }
+    fn flush_layout(&mut self) {
+        self.layout_due = None;
+        if let Some(layout) = self.pending_layout.take()
+            && let Some(store) = &self.store
+            && let Err(error) = store.save_layout(&layout)
+        {
+            self.emit(CoreEvent::ConfigError(error));
+        }
+    }
+    fn agent_entry(&mut self, record: agent::Record, request: agent::Request) -> SessionId {
+        let id = SessionId(self.next_id);
+        self.next_id += 1;
+        let runtime = agent::Runtime::new(record, request);
+        self.entries.insert(
+            id,
+            Entry {
+                info: SessionInfo {
+                    agent: Some(runtime.info.clone()),
+                    process: None,
+                    config_changed: false,
+                    pid: None,
+                    id,
+                    launch: LaunchId(0),
+                    project: runtime.info.record.project.clone(),
+                    name: runtime.info.record.name.clone(),
+                    status: SessionStatus::Exited { code: None },
+                },
+                cwd: Some(runtime.info.record.cwd.clone()),
+                agent: Some(runtime),
+                process: None,
+                desired: None,
+                history: None,
+                joining: false,
+                session: None,
+                size: Dimensions::default(),
+                stopping: None,
+                close: false,
+                restart: false,
+                drained: true,
+                exited: true,
+            },
+        );
+        id
+    }
+    fn remove_session(&mut self, id: SessionId) {
+        let Some(entry) = self.entries.get(&id) else {
+            return;
+        };
+        let result = if let Some(runtime) = &entry.agent {
+            self.store
+                .as_ref()
+                .ok_or("Agent store unavailable".into())
+                .and_then(|store| store.delete_agent(&runtime.info.record.id))
+        } else if let Some(process) = &entry.info.process {
+            config::remove(&self.path, &entry.info.project, Some(process)).map(|config| {
+                self.config = config;
+                self.emit(CoreEvent::Config(self.config.clone()));
+                self.sync_processes();
+            })
+        } else {
+            Ok(())
+        };
+        if let Err(error) = result {
+            self.emit(CoreEvent::ConfigError(error));
+            return;
+        }
+        self.removing.insert(id);
+        self.stop(id, true, false);
+    }
+    fn remove_project(&mut self, project: String) {
+        let config = match config::remove(&self.path, &project, None) {
+            Ok(config) => config,
+            Err(error) => {
+                self.emit(CoreEvent::ConfigError(error));
+                return;
+            }
+        };
+        self.config = config;
+        // Exclude late hooks before deleting records, so they cannot resurrect
+        // a removed conversation while its PTY is shutting down.
+        let ids: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| entry.info.project == project)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &ids {
+            self.removing.insert(*id);
+        }
+        if let Some(store) = &self.store
+            && let Err(error) = store.delete_project_agents(&project)
+        {
+            self.emit(CoreEvent::ConfigError(error));
+        }
+        self.emit(CoreEvent::Config(self.config.clone()));
+        self.sync_processes();
+        for id in ids {
+            self.stop(id, true, false);
+        }
+        self.emit(CoreEvent::ProjectRemoved(project));
+    }
+    fn new_agent(&mut self, project: String, picker: bool) {
+        if self.recovery_pending || self.orphan_check_at.is_some() {
+            self.emit(CoreEvent::ConfigError(
+                "Resolve previous sessions before launching Claude".into(),
+            ));
+            return;
+        }
+        let Some(project) = self
+            .config
+            .projects
+            .iter()
+            .find(|candidate| candidate.id == project)
+        else {
+            return;
+        };
+        let record = agent::Record {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: project.id.clone(),
+            name: if picker {
+                "Claude · choose session".into()
+            } else {
+                "Claude".into()
+            },
+            cwd: project.path.clone(),
+            role: agent::Role::Primary,
+            session_id: (!picker).then(|| uuid::Uuid::new_v4().to_string()),
+        };
+        let result = self
+            .store
+            .as_ref()
+            .ok_or("Agent store unavailable".into())
+            .and_then(|store| store.save_agent(&record));
+        if let Err(error) = result {
+            self.emit(CoreEvent::ConfigError(error));
+            return;
+        }
+        let id = self.agent_entry(
+            record,
+            if picker {
+                agent::Request::ResumePicker
+            } else {
+                agent::Request::New
+            },
+        );
+        self.spawn(id);
+    }
+    fn resume_agent(&mut self, id: SessionId) {
+        if self.removing.contains(&id) {
+            return;
+        }
+        if self.recovery_pending || self.orphan_check_at.is_some() {
+            self.emit(CoreEvent::ConfigError(
+                "Resolve previous sessions before resuming Claude".into(),
+            ));
+            return;
+        }
+        if let Some(runtime) = self.entries.get(&id).and_then(|entry| entry.agent.as_ref()) {
+            let owner = format!("agent:{}", runtime.info.record.id);
+            if self.orphans.iter().any(|orphan| {
+                orphan.owner == owner
+                    && !orphan
+                        .session
+                        .members()
+                        .is_ok_and(|members| members.is_empty())
+            }) {
+                self.emit(CoreEvent::ConfigError(
+                    "Previous Claude instance is still running; recover it before resuming".into(),
+                ));
+                return;
+            }
+        }
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        let Some(runtime) = &mut entry.agent else {
+            return;
+        };
+        if entry.session.is_some() || entry.joining || !entry.exited {
+            self.emit(CoreEvent::ConfigError(
+                "Stop Claude before resuming this conversation".into(),
+            ));
+            return;
+        }
+        runtime.request = if runtime.info.record.session_id.is_some() {
+            agent::Request::Resume
+        } else {
+            agent::Request::ResumePicker
+        };
+        runtime.launching();
+        entry.close = false;
+        self.spawn(id);
+    }
+    fn hook_messages(&mut self) {
+        let messages: Vec<_> = self
+            .hooks
+            .as_ref()
+            .map(|server| server.events.try_iter().collect())
+            .unwrap_or_default();
+        for event in messages {
+            self.hook(event);
+        }
+    }
+    fn hook(&mut self, event: ipc::HookEvent) {
+        let Some(id) = self
+            .entries
+            .iter()
+            .find(|(_, entry)| {
+                entry
+                    .agent
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.info.record.id == event.agent_id)
+            })
+            .map(|(id, _)| *id)
+        else {
+            return;
+        };
+        if self.removing.contains(&id) {
+            return;
+        }
+        let entry = self.entries.get_mut(&id).expect("registered agent");
+        let runtime = entry.agent.as_mut().expect("agent identity");
+        if entry.info.launch.0 != event.launch || runtime.token != event.token || entry.exited {
+            return;
+        }
+        let now = self.clock.now();
+        if now.saturating_sub(runtime.rate_window) >= Duration::from_secs(1) {
+            runtime.rate_window = now;
+            runtime.rate_count = 0;
+        }
+        runtime.rate_count += 1;
+        if runtime.rate_count > 100 {
+            return;
+        }
+        let previous = runtime.info.record.session_id.clone();
+        runtime.apply(&event);
+        let record =
+            (previous != runtime.info.record.session_id).then(|| runtime.info.record.clone());
+        if let (Some(store), Some(record)) = (&self.store, record)
+            && let Err(error) = store.save_agent(&record)
+        {
+            self.emit(CoreEvent::ConfigError(error));
+        }
+        self.changed(id);
+    }
+    fn restore(&mut self) {
+        if self.restored || self.probe.is_some() {
+            return;
+        }
+        self.restored = true;
+        let Some(store) = &self.store else {
+            self.emit(CoreEvent::Restored {
+                saved: false,
+                layout: layout::Layout::default(),
+                keys: BTreeMap::new(),
+            });
+            return;
+        };
+        let records = store.agents();
+        let layout = store.layout();
+        let (Ok(records), Ok(layout)) = (records, layout) else {
+            self.emit(CoreEvent::ConfigError(
+                "Could not restore saved layout or agents".into(),
+            ));
+            self.emit(CoreEvent::Restored {
+                saved: false,
+                layout: layout::Layout::default(),
+                keys: BTreeMap::new(),
+            });
+            return;
+        };
+        let saved = layout.is_some();
+        let mut layout = layout.unwrap_or_default();
+        for record in records {
+            if record.role == agent::Role::Side
+                || !self.config.projects.iter().any(|p| p.id == record.project)
+            {
+                continue;
+            }
+            let id = self.agent_entry(record, agent::Request::Resume);
+            self.entries
+                .get_mut(&id)
+                .unwrap()
+                .agent
+                .as_mut()
+                .unwrap()
+                .exited();
+            self.changed(id);
+        }
+        let mut keys: BTreeMap<_, _> = self
+            .entries
+            .iter()
+            .map(|(id, entry)| (self.key(entry), *id))
+            .collect();
+        for tab in &mut layout.tabs {
+            if !matches!(tab.kind, layout::Kind::Shell) {
+                continue;
+            }
+            if !self
+                .config
+                .projects
+                .iter()
+                .any(|project| project.id == tab.project)
+            {
+                continue;
+            }
+            let id = SessionId(self.next_id);
+            self.next_id += 1;
+            self.entries.insert(
+                id,
+                Entry {
+                    info: SessionInfo {
+                        agent: None,
+                        process: None,
+                        config_changed: false,
+                        pid: None,
+                        id,
+                        launch: LaunchId(0),
+                        project: tab.project.clone(),
+                        name: tab.name.clone(),
+                        status: SessionStatus::Starting,
+                    },
+                    cwd: tab
+                        .cwd
+                        .clone()
+                        .filter(|path| path.is_absolute() && path.is_dir()),
+                    agent: None,
+                    process: None,
+                    desired: None,
+                    history: None,
+                    joining: false,
+                    session: None,
+                    size: Dimensions::default(),
+                    stopping: None,
+                    close: false,
+                    restart: false,
+                    drained: false,
+                    exited: false,
+                },
+            );
+            keys.insert(tab.key.clone(), id);
+            self.spawn(id);
+            // Layout keys in this event retain their old values; the UI maps
+            // selection to the newly allocated IDs, then saves fresh keys.
+        }
+        self.emit(CoreEvent::Restored {
+            saved,
+            layout,
+            keys,
+        });
+    }
     fn owner(&self, id: SessionId) -> String {
-        let info = &self.entries[&id].info;
+        let entry = &self.entries[&id];
+        let info = &entry.info;
+        if let Some(runtime) = &entry.agent {
+            return format!("agent:{}", runtime.info.record.id);
+        }
         info.process.as_ref().map_or_else(
             || format!("shell:{}:{}", info.project, id.0),
             |process| format!("process:{}/{}", info.project, process),
@@ -988,7 +1514,10 @@ impl Actor {
             self.entries.insert(
                 id,
                 Entry {
+                    agent: None,
+                    cwd: None,
                     info: SessionInfo {
+                        agent: None,
                         id,
                         launch: LaunchId(0),
                         pid: None,
@@ -1090,7 +1619,12 @@ impl Actor {
             return;
         };
         entry.stopping = None;
+        entry.info.pid = None;
+        if entry.agent.is_some() && matches!(entry.info.status, SessionStatus::Stopping) {
+            entry.info.status = SessionStatus::Stopped;
+        }
         if entry.close {
+            self.removing.remove(&id);
             self.entries.remove(&id);
             self.emit(CoreEvent::SessionClosed(id));
         } else if entry.restart {
@@ -1143,6 +1677,9 @@ impl Actor {
     }
     fn timers(&mut self) {
         let now = self.clock.now();
+        if self.layout_due.is_some_and(|deadline| now >= deadline) {
+            self.flush_layout();
+        }
         if self.config_due.is_some_and(|deadline| now >= deadline) {
             self.config_due = None;
             self.load_config();
@@ -1254,6 +1791,91 @@ mod tests {
         }
     }
     #[test]
+    fn stale_or_unauthenticated_hooks_cannot_update_agent_and_rate_is_bounded() {
+        let (sender, _) = mpsc::channel();
+        let (events, receiver) = async_channel::unbounded();
+        let mut actor = Actor::new(PathBuf::new(), None, sender, events);
+        let record = agent::Record {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: "p".into(),
+            name: "Claude".into(),
+            cwd: PathBuf::from("/tmp"),
+            role: agent::Role::Primary,
+            session_id: Some(uuid::Uuid::new_v4().to_string()),
+        };
+        let id = actor.agent_entry(record.clone(), agent::Request::New);
+        let entry = actor.entries.get_mut(&id).unwrap();
+        entry.info.launch = LaunchId(9);
+        entry.exited = false;
+        let token = entry.agent.as_ref().unwrap().token.clone();
+        let event = ipc::HookEvent {
+            agent_id: record.id,
+            launch: 9,
+            token,
+            event: "UserPromptSubmit".into(),
+            ..Default::default()
+        };
+        actor.hook(ipc::HookEvent {
+            launch: 8,
+            ..event.clone()
+        });
+        actor.hook(ipc::HookEvent {
+            token: "wrong".into(),
+            ..event.clone()
+        });
+        assert!(receiver.is_empty());
+        actor.hook(event.clone());
+        assert_eq!(
+            actor.entries[&id].agent.as_ref().unwrap().info.status,
+            agent::Status::Working
+        );
+        while receiver.try_recv().is_ok() {}
+        for _ in 0..150 {
+            actor.hook(event.clone());
+        }
+        let mut count = 0;
+        while receiver.try_recv().is_ok() {
+            count += 1;
+        }
+        assert!(count <= 99);
+        // A late SessionStart must not recreate an agent deleted while stopping.
+        let folder =
+            std::env::temp_dir().join(format!("devdesk-removed-hook-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let store = Store::open(&folder.join("state.db")).unwrap();
+        store
+            .save_agent(&actor.entries[&id].agent.as_ref().unwrap().info.record)
+            .unwrap();
+        actor.store = Some(store);
+        actor.clock = Box::new(FakeClock(Duration::from_secs(2)));
+        actor.remove_session(id);
+        actor.hook(ipc::HookEvent {
+            event: "SessionStart".into(),
+            session_id: Some(uuid::Uuid::new_v4().to_string()),
+            ..event.clone()
+        });
+        assert!(actor.store.as_ref().unwrap().agents().unwrap().is_empty());
+        actor
+            .entries
+            .get_mut(&id)
+            .unwrap()
+            .agent
+            .as_mut()
+            .unwrap()
+            .exited();
+        actor.entries.get_mut(&id).unwrap().exited = true;
+        actor.hook(ipc::HookEvent {
+            event: "PermissionRequest".into(),
+            ..event
+        });
+        assert_eq!(
+            actor.entries[&id].agent.as_ref().unwrap().info.status,
+            agent::Status::Exited
+        );
+        drop(actor);
+        std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
     fn recovery_pauses_due_retries_without_dropping_them() {
         let (sender, _) = mpsc::channel();
         let (events, receiver) = async_channel::unbounded();
@@ -1321,11 +1943,14 @@ mod tests {
         actor.entries.insert(
             SessionId(1),
             Entry {
+                agent: None,
+                cwd: None,
                 process: None,
                 desired: None,
                 history: None,
                 joining: false,
                 info: SessionInfo {
+                    agent: None,
                     process: None,
                     config_changed: false,
                     pid: None,

@@ -150,7 +150,7 @@ Environment: `DEVDESK_AGENT_ID=<uuid>`, `CLAUDE_CODE_NONBLOCKING_STDOUT=1` ✅ (
 | `Notification` ✅ `notification_type=permission_prompt` | `NeedsApproval` (backup for PermissionRequest) |
 | `Notification` `idle_prompt` | `Idle` (backup; ~60 s lag) |
 | `PostToolUseFailure` ✅ | `Working` (a denied or failed tool also ends NeedsApproval) |
-| `PermissionDenied` ✅ | `Working` (the agent continues after a denial) |
+| `PermissionDenied` ✅ | `Working` (auto-mode denial; manual denials use PostToolUseFailure) |
 | `Stop` 🧪 | `Idle`. **But** another hook (e.g. the user's own) can block Stop and make Claude continue. A later `UserPromptSubmit`/`PostToolUse` puts it back to Working |
 | `StopFailure` ✅ (API error ends the turn) | `Idle` with an error badge ("turn failed") |
 | `SessionEnd` 🧪 | (informational; process exit is authoritative) |
@@ -158,16 +158,28 @@ Environment: `DEVDESK_AGENT_ID=<uuid>`, `CLAUDE_CODE_NONBLOCKING_STDOUT=1` ✅ (
 
 Status is presented as **best-effort**. Before M4 sign-off, test these scenarios: approve then the tool fails, deny, API failure, parallel tool calls, and a user Stop hook that blocks.
 
-`PostToolUse` is the **only per-tool-call hook** kept, because it's the only signal that clears NeedsApproval after the user approves. `PreToolUse` would double the per-call helper cost and add no information. Per-call cost is measured in M4 (target under 10 ms per helper run).
+`PostToolUse` and the tool failure/denial hooks clear NeedsApproval when a pending call finishes. `PreToolUse` would double the per-call helper cost and add no information. Per-call cost is measured in M4 (target under 10 ms per helper run).
 
 **Hook helper contract** (critical: it must never slow down or break the agent):
 1. Read the payload from **stdin for Claude hooks**, or from the **last argv argument for Codex `notify`** (Codex passes JSON as argv and gives null stdin ✅). Read `DEVDESK_AGENT_ID`, `DEVDESK_LAUNCH_ID` and `DEVDESK_HOOK_TOKEN` from env.
-2. **Extract the small status fields first** (event name, session/thread ID, notification type), then attach a payload **truncated** to 64 KiB, so a huge `last-assistant-message` can never cost the thread ID. Connect to `run/devdesk.sock` with a **200 ms connect and write deadline**. Write one line.
+2. **Extract the small status fields first** (event name, session/thread ID, notification type), then send only those compact fields (at most 64 KiB); prompts, tool input/output and transcript paths are discarded. The stdin parser streams ignored fields, with a 200 ms read deadline and 64 MiB input ceiling, so a large ignored assistant message does not truncate a later session ID. Connect to `run/devdesk.sock` with a **200 ms connect and write deadline**. Write one line.
 3. **Always exit 0 and print nothing to stdout**, even if DevDesk is unreachable. Claude parses hook stdout as JSON for some events, and exit 2 blocks. The helper must never do either.
 
-The helper is the main binary, which dispatches on `argv[1] == "hook"` **before** initialising GPUI, so its startup cost is a plain Rust process start (≈ms). ❓ Measure in M4: the target is <10 ms per hook.
+The helper is the main binary, which dispatches on `argv[1] == "hook"` **before** initialising GPUI, so its startup cost is a plain Rust process start (≈ms). 🧪 M4 warmed release helper p95 is below 10 ms; first invocation exceeds it. Measurements are in [perf/m4.json](../perf/m4.json).
 
-❓ **A5:** `--settings` hooks are expected to *add to* the user's own `~/.claude/settings.json` hooks ("lists merge" ✅). The M4 probe confirms this with a user-level probe hook.
+🧪 **A5 verified here:** Claude 2.1.295 ran both a temporary user-level Setup hook
+and an injected `--settings` Setup hook with the same session ID. The probe uses
+`CLAUDE_CONFIG_DIR` and `--init-only`; the real user's settings are untouched and
+no model call is needed. This verifies settings merging; interactive event delivery
+is part of owner acceptance. See [M4 review](m4-review.md).
+
+✅ The documented [PermissionRequest payload](https://code.claude.com/docs/en/hooks#permissionrequest)
+contains `tool_name`, but no `tool_use_id`. M4 matches by tool ID when present and
+by tool name otherwise. Two simultaneous permission requests for the same tool
+remain ambiguous. Tests cover distinct parallel tools with the documented shape.
+✅ `stop_hook_active` identifies continuation from an earlier Stop hook; it cannot
+prove whether another hook blocks the current Stop. Status remains best-effort,
+with later tool events correcting it and PTY exit authoritative.
 
 ### 3.3 Sessions
 

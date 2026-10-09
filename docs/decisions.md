@@ -111,7 +111,7 @@ Estimate: a daemon is an L-sized project, not a transport swap. No change now (i
 **Consequences:** Codex status is heuristic. Upgrade path: a DevDesk-owned Codex app-server.
 
 ### ADR-010: Persistence: TOML + SQLite
-**Decision:** User-authored `config.toml` (projects, processes, settings), hot-reloaded. DevDesk only appends projects via `toml_edit`. `state.db` (rusqlite, bundled, WAL) holds agent records, UI layout and the session ledger, and is written only by the supervisor thread.
+**Decision:** User-authored `config.toml` (projects, processes, settings), hot-reloaded. DevDesk appends projects via `toml_edit`. Owner-authorized M4 extension: sidebar Remove controls also delete project/process definitions with confirmation, preserving unrelated comments and project files. `state.db` (rusqlite, bundled, WAL) holds agent records, UI layout and the session ledger, and is written only by the supervisor thread.
 **Rejected:** YAML (no maintained serde stack, whitespace-fragile); sqlx (Tokio); a JSON state file (no atomic multi-record updates or queries as history grows).
 
 ### ADR-011: Three-crate workspace

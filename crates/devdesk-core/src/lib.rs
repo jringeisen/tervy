@@ -10,3 +10,8 @@ pub mod instance;
 pub mod process;
 pub mod store;
 pub mod supervisor;
+
+pub mod agent;
+pub mod hook;
+pub mod ipc;
+pub mod layout;

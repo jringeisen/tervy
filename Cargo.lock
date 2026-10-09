@@ -1388,6 +1388,9 @@ dependencies = [
  "devdesk-core",
  "devdesk-term",
  "gpui-kit",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "tracing",
  "tracing-subscriber",
 ]
@@ -1402,8 +1405,10 @@ dependencies = [
  "notify",
  "rusqlite",
  "serde",
+ "serde_json",
  "toml 1.1.7+spec-1.1.0",
  "toml_edit 0.25.16+spec-1.1.0",
+ "uuid",
 ]
 
 [[package]]

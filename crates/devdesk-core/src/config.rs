@@ -317,6 +317,64 @@ pub fn append_project(path: &Path, folder: &Path) -> Result<(Config, String), St
     Ok((config, id))
 }
 
+/// Remove only a DevDesk configuration entry; project files are never touched.
+/// Re-read before atomic replacement to preserve comments and reject editor races.
+pub fn remove(path: &Path, project_id: &str, process_id: Option<&str>) -> Result<Config, String> {
+    let original = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut document: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|e: toml_edit::TomlError| e.to_string())?;
+    let projects = document
+        .get_mut("projects")
+        .and_then(|item| item.as_array_of_tables_mut())
+        .ok_or("projects must use [[projects]] tables")?;
+    let index = projects
+        .iter()
+        .position(|table| table.get("id").and_then(|item| item.as_str()) == Some(project_id))
+        .ok_or("Project is no longer configured")?;
+    if let Some(process_id) = process_id {
+        let processes = projects
+            .get_mut(index)
+            .unwrap()
+            .get_mut("processes")
+            .and_then(|item| item.as_array_of_tables_mut())
+            .ok_or("Process is no longer configured")?;
+        let index = processes
+            .iter()
+            .position(|table| table.get("id").and_then(|item| item.as_str()) == Some(process_id))
+            .ok_or("Process is no longer configured")?;
+        processes.remove(index);
+    } else {
+        projects.remove(index);
+    }
+    let output = document.to_string();
+    let config = parse(
+        &output,
+        &PathBuf::from(std::env::var_os("HOME").unwrap_or_default()),
+    )?;
+    let temporary = path.with_file_name(format!(".remove-{}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&temporary)
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        file.write_all(output.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|e| e.to_string())?;
+        if std::fs::read_to_string(path).map_err(|e| e.to_string())? != original {
+            return Err("config.toml changed while removing the entry; try again".into());
+        }
+        std::fs::rename(&temporary, path).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result?;
+    Ok(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -564,3 +564,15 @@ its event sink, reset modes and attach a new parser. Core never reads Term
 internals. Ledger recovery covers leaderless members and guards birth times;
 manual Leave preserves ownership records and prevents duplicate process starts.
 See [M3 review](m3-review.md) for evidence and remaining owner acceptance.
+
+
+M4 implementation evidence (🧪, replacement machine): schema 2 adds agent records
+and layout snapshots without changing the M3 ledger. The actor remains the sole
+SQLite owner and applies hook authentication, launch checks and rate limits.
+A blocking listener starts at most 16 bounded readers; only compact validated
+signals enter its bounded queue. Providers build argv on spawn workers using the
+cached environment; they own no PTYs. Role derives the permission profile on every
+launch. Side records are excluded from automatic restore. UI holds only mirrors,
+sends layout changes, and restores tab order through stable identities rather than
+new session IDs. Shell cwd reads use macOS SDK identity guards. See [M4 review](m4-review.md)
+for tests, best-effort status limits and pending owner acceptance.

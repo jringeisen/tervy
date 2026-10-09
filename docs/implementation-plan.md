@@ -1,6 +1,6 @@
 # DevDesk — Implementation Plan
 
-Status: **Approved; implementing milestones with owner review.** M0–M3 are owner approved; M4 is next.
+Status: **Approved; implementing milestones with owner review.** M0–M4 are owner approved; M5–M7 proceed under the owner's autonomous implementation/validation/commit authorization (2026-10-08).
 
 Sizing: **S** ≈ under a day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks of focused, Claude-assisted work with owner review. These are relative sizes for ordering and risk, not commitments.
 
@@ -188,6 +188,8 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 - "Resume other Claude session…" → pick a session in the CLI picker → it becomes a tracked record.
 - The hook helper adds under 10 ms per event. Killing DevDesk mid-session doesn't hang the agent's hooks.
 - A5 confirmed, or mitigated and documented.
+
+**M4 implementation review (2026-10-08):** 🧪 Tasks 4.1–4.9 are implemented; [M4 review](m4-review.md) records automated evidence and the pending owner checklist. Claude 2.1.295 settings merge, running fork and same-session resume probes pass. Warmed release helper timing meets 10 ms; first invocation and first app launch miss their budgets. 🧪 Owner approved M4 (“M4 looks good”) and authorized autonomous validation, commits and continuation through M5–M7 while unavailable. Individual manual coverage limits and performance misses remain recorded.
 
 ---
 

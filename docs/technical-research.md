@@ -329,6 +329,17 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 
 - 🧪 M3 release results are in `perf/m3.json`: normal first-frame p50 188.9 ms / first-p95 719.8 ms; comparable terminal p50 252.2 ms (+53.5% vs M2), painted echo p95 8.54 ms. Two stress trials failed frame coverage (second timed out); all 22 traced sessions were cleaned. Sampled main thread waited in AppKit, supervisor in channel receive. ❓ Window/display conditions and the startup regression need further validation; no stress pass or A11 resolution is claimed. M2 baseline retained.
 
+## 10g. M4 Claude integration and persistence (replacement machine, 2026-10-08)
+
+- 📘 Claude `--version` reports 2.1.295, matching the original probes; installed help is the launch-argument authority. Codex provider/config probes remain M6.
+- 🧪 `scripts/cli-probe.sh` verifies A5 without model calls: a temporary `CLAUDE_CONFIG_DIR` user Setup hook and an injected `--settings` Setup hook both fire with the same session ID under `--init-only`.
+- 🧪 The explicitly authorized `--real` probes passed with Haiku and a $0.10 cap per CLI invocation: a running parent's fork inherited BLUEHERON and received a distinct SessionStart ID; Write/Edit/Bash canaries were unchanged; the parent completed; resume retained the parent's session ID and context. The first attempt exited before its requested Bash sleep; the cause was not captured. A retry passed, and the script now retains failure diagnostics. This is headless evidence, not M5 interactive enforcement acceptance. No transcript or rollout files were read.
+- ✅ The current [Claude hook reference](https://code.claude.com/docs/en/hooks) omits `tool_use_id` from PermissionRequest. Tool-name fallback covers distinct parallel tools, but simultaneous requests for the same tool remain ambiguous. PermissionDenied is an auto-mode event; manual denials are handled through PostToolUseFailure. Stop-hook ordering also makes status best-effort.
+- 🧪 Schema migration preserves the ledger; restore fixtures verify actual shell cwd through the SDK, Primary agent Resume stubs without spawning Claude, and exclusion of Side records. Helper fixtures preserve a later session ID after a 200 KB ignored field and bound held-open stdin. Authentication rejects wrong tokens, stale launches and excess per-agent events. Slow/oversized IPC clients do not block a valid hook.
+- 🧪 Release startup and helper samples, including their first-invocation budget misses, are recorded in [perf/m4.json](../perf/m4.json). The approved M2 baseline is retained. No new idle/stress pass or A11 fix is claimed.
+- 🧪 Owner requested removal controls for projects/processes/agents; real-session tests cover cleanup, preservation of files/unrelated configuration, and no restored deleted agents. Both Tab binding revisions failed owner review. 🧪 Right Arrow accepts Claude's muted suggestion; the owner accepted this workaround. Tab acceptance remains unresolved, with opt-in Tab-only diagnostics available.
+- ❓ Interactive status, approvals, CLI picker, rename and same-layout/same-conversation restore await owner acceptance in [M4 review](m4-review.md).
+
 ## 11. Library compatibility and licensing
 
 - **Version coupling:** `gpui-component` pins `gpui-pre` exactly, and every GPUI-dependent crate must match that pin. Upgrades happen as one unit ("bump gpui-kit").
@@ -371,7 +382,7 @@ All the risks in one place. Details are in the sections referenced.
 | A2 | Runtime shader compilation stays within the cold-start budget | Need offline shaders, so Xcode is required | **Partly verified in M0:** original machine release p50 152 ms, first launch after rebuild ~1.1 s. 🧪 Replacement machine: p50 169.9 ms, first launch 473.2 ms included in the ten-run sample (§10b). M1 first-frame and content measurements are recorded separately in §10d / `perf/baseline-m1.json`; true cold-cache shader compile remains unverified |
 | A3 | Claude `--tools` / `--disallowedTools` / `--strict-mcp-config` enforce in **interactive** mode as they do in `-p` | Side conversations not read-only. Fall back to approach B (headless `-p`) | M5 (first acceptance test) |
 | A4 | `codex fork -s read-only` enforces the same in the interactive TUI with `--no-daemon` | Same | M6 |
-| A5 | `--settings` hooks add to, rather than replace, the user's hooks | Could disable the user's own hooks. Mitigation: append to them explicitly, or document it | M4 |
+| A5 | `--settings` hooks add to, rather than replace, the user's hooks | Could disable the user's own hooks | 🧪 M4: Claude 2.1.295, temporary user-level + injected Setup hooks both fired with the same ID using `--init-only`; real user settings unchanged (§10g) |
 | A6 | `codex -c notify=[…]` and `-c tui.*` work in the interactive TUI and force embedded mode | Status degrades to exited/running only | M6 |
 | A7 | Children spawned via alacritty `tty` start with default signal dispositions and mask | Children ignore SIGINT/SIGPIPE, so graceful stop fails | M1 |
 | A8 | One OS thread per PTY is acceptable at 20–40 terminals | Need a shared `polling`-based reader | M7 benchmark |

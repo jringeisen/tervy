@@ -1,4 +1,5 @@
 //! Native views and direct input; all session lifecycle belongs to the core.
+mod badge;
 mod composition;
 mod logging;
 mod m2_perf;
@@ -19,6 +20,14 @@ struct Desktop {
 impl Global for Desktop {}
 
 fn main() {
+    let arguments: Vec<String> = std::env::args().collect();
+    if arguments.get(1).map(String::as_str) == Some("hook") {
+        devdesk_core::hook::run(
+            arguments.get(2).map(String::as_str),
+            arguments.last().map(String::as_str),
+        );
+        return;
+    }
     let perf = perf::StartupTimer::from_env();
     logging::init();
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "DevDesk starting");
@@ -63,6 +72,18 @@ fn main() {
     app.run(move |cx| {
         gpui_kit::init(cx);
         install_menus_and_keys(cx);
+        if std::env::var_os("DEVDESK_TRACE_TAB").is_some() {
+            cx.observe_keystrokes(|event, _, _| {
+                if event.keystroke.key == "tab" {
+                    eprintln!(
+                        "devdesk-tab resolved action={:?} contexts={:?}",
+                        event.action.as_ref().map(|a| a.name()),
+                        event.context_stack
+                    );
+                }
+            })
+            .detach();
+        }
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1200.), px(780.)), cx)),
             ..Default::default()
@@ -135,6 +156,7 @@ fn install_menus_and_keys(cx: &mut App) {
         KeyBinding::new("cmd-8", Tab8, Some("Workspace")),
         KeyBinding::new("cmd-9", Tab9, Some("Workspace")),
     ]);
+    cx.bind_keys(terminal_view::key_bindings());
     cx.set_menus([
         Menu::new("DevDesk").items([MenuItem::action("Quit DevDesk", Quit)]),
         Menu::new("File").items([

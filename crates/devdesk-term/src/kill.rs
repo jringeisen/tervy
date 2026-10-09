@@ -172,3 +172,42 @@ impl OwnedSession {
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 }
+
+/// Read a live shell's cwd through the macOS SDK, guarding PID reuse before
+/// and after the query. This belongs on the supervisor, never in a GPUI render.
+pub fn cwd(identity: ProcessIdentity) -> io::Result<std::path::PathBuf> {
+    if ProcessIdentity::read(identity.pid)? != identity {
+        return Err(io::Error::other("Shell identity changed"));
+    }
+    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    let count = unsafe {
+        libc::proc_pidinfo(
+            identity.pid,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            (&mut info as *mut libc::proc_vnodepathinfo).cast(),
+            size,
+        )
+    };
+    if count != size {
+        return Err(io::Error::last_os_error());
+    }
+    if ProcessIdentity::read(identity.pid)? != identity {
+        return Err(io::Error::other("Shell identity changed"));
+    }
+    use std::os::unix::ffi::OsStringExt;
+    let bytes = info
+        .pvi_cdir
+        .vip_path
+        .iter()
+        .flatten()
+        .take_while(|byte| **byte != 0)
+        .map(|byte| *byte as u8)
+        .collect::<Vec<_>>();
+    let path = std::path::PathBuf::from(std::ffi::OsString::from_vec(bytes));
+    if !path.is_absolute() {
+        return Err(io::Error::other("Shell cwd unavailable"));
+    }
+    Ok(path)
+}

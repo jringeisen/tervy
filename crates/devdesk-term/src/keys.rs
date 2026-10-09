@@ -390,6 +390,32 @@ mod tests {
     }
 
     #[test]
+    fn tab_completion_and_backtab_follow_the_negotiated_protocol() {
+        let plain = input(Key::Tab, Modifiers::default());
+        assert_eq!(encode(&plain, TermMode::NONE, false), b"\t");
+        assert_eq!(
+            encode(&plain, TermMode::DISAMBIGUATE_ESC_CODES, false),
+            b"\t"
+        );
+        assert_eq!(
+            encode(&plain, TermMode::REPORT_ALL_KEYS_AS_ESC, false),
+            b"\x1b[9;1u"
+        );
+        let shifted = input(
+            Key::Tab,
+            Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        );
+        assert_eq!(encode(&shifted, TermMode::NONE, false), b"\x1b[Z");
+        assert_eq!(
+            encode(&shifted, TermMode::DISAMBIGUATE_ESC_CODES, false),
+            b"\x1b[9;2u"
+        );
+    }
+
+    #[test]
     fn kitty_release_and_associated_unicode_text() {
         let mut input = input(
             Key::Character('a'),

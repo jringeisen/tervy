@@ -16,6 +16,17 @@ use gpui_kit::*;
 
 use crate::terminal_element::{CellMetrics, TerminalElement};
 
+gpui_kit::actions!(devdesk_terminal, [SendTab, SendBacktab]);
+
+/// Action bindings resolve before raw keys. Handle Tab at the focused terminal
+/// itself so root focus traversal cannot consume it, while inputs keep traversal.
+pub fn key_bindings() -> [KeyBinding; 2] {
+    [
+        KeyBinding::new("tab", SendTab, Some("Terminal")),
+        KeyBinding::new("shift-tab", SendBacktab, Some("Terminal")),
+    ]
+}
+
 pub struct RenderedTerminal {
     pub handle: TerminalHandle,
 }
@@ -178,6 +189,14 @@ impl TerminalView {
         }
     }
 
+    pub fn set_agent_stub(&mut self, cx: &mut Context<Self>) {
+        self.exited = true;
+        self.status = "Claude conversation · Return to resume".into();
+        if self.visible {
+            cx.notify();
+        }
+    }
+
     fn listen(&mut self, events: TerminalEvents, cx: &mut Context<Self>) {
         self.tasks.push(cx.spawn(async move |view, cx| {
             while let Ok(query) = events.queries.recv().await {
@@ -277,6 +296,39 @@ impl TerminalView {
                 .handle
                 .write(keys::focus(focused, session.handle.mode()));
         }
+    }
+
+    fn tab(&mut self, _: &SendTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_tab(false, window, cx);
+    }
+    fn backtab(&mut self, _: &SendBacktab, window: &mut Window, cx: &mut Context<Self>) {
+        self.send_tab(true, window, cx);
+    }
+    fn send_tab(&mut self, shift: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(session) = &self.session
+            && self.preedit.is_empty()
+        {
+            let mode = session.handle.mode();
+            let input = KeyInput {
+                key: Key::Tab,
+                modifiers: keys::Modifiers {
+                    shift,
+                    ..Default::default()
+                },
+                event: KeyEvent::Press,
+                text: Some("\t".into()),
+                shifted: None,
+                base_layout: None,
+            };
+            let bytes = keys::encode(&input, mode, self.option_as_meta);
+            if std::env::var_os("DEVDESK_TRACE_TAB").is_some() {
+                eprintln!("devdesk-tab action shift={shift} mode={mode:?} bytes={bytes:?}");
+            }
+            self.write_input(bytes);
+            self.bell = false;
+        }
+        window.prevent_default();
+        cx.stop_propagation();
     }
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -602,6 +654,8 @@ impl Render for TerminalView {
                     .overflow_hidden()
                     .track_focus(&self.focus)
                     .key_context("Terminal")
+                    .on_action(cx.listener(Self::tab))
+                    .on_action(cx.listener(Self::backtab))
                     .on_key_down(cx.listener(Self::key))
                     .on_key_up(cx.listener(Self::key_up))
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
@@ -796,5 +850,43 @@ impl EntityInputHandler for TerminalView {
         _: &mut Context<Self>,
     ) -> Option<usize> {
         Some(0)
+    }
+}
+
+#[cfg(test)]
+mod key_routing_tests {
+    use super::{SendBacktab, SendTab, key_bindings};
+    use gpui_kit::{KeyBinding, KeyContext, Keymap, Keystroke};
+
+    #[::core::prelude::v1::test]
+    fn terminal_tab_bypasses_root_navigation_but_inputs_keep_it() {
+        let mut keymap = Keymap::default();
+        // The root action's identity does not affect binding precedence.
+        keymap.add_bindings([
+            KeyBinding::new("tab", crate::Quit, Some("Root")),
+            KeyBinding::new("shift-tab", crate::Quit, Some("Root")),
+        ]);
+        keymap.add_bindings(key_bindings());
+        for key in ["tab", "shift-tab"] {
+            let stroke = Keystroke::parse(key).unwrap();
+            for (context, expected) in [("Terminal", 2), ("Input", 1)] {
+                let (bindings, pending) = keymap.bindings_for_input(
+                    std::slice::from_ref(&stroke),
+                    &[
+                        KeyContext::parse("Root").unwrap(),
+                        KeyContext::parse(context).unwrap(),
+                    ],
+                );
+                assert_eq!(bindings.len(), expected, "{key} in {context}");
+                assert!(!pending);
+                if context == "Terminal" {
+                    assert!(if key == "tab" {
+                        bindings[0].action().partial_eq(&SendTab)
+                    } else {
+                        bindings[0].action().partial_eq(&SendBacktab)
+                    });
+                }
+            }
+        }
     }
 }
