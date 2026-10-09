@@ -1,0 +1,18 @@
+{
+  "recorded": "2026-10-08",
+  "milestone": "M0 (empty window: sidebar placeholder, no terminals)",
+  "machine": "Apple Silicon, macOS 27.0.1",
+  "toolchain": "rustc 1.99.0, Command Line Tools only (no Xcode), gpui-kit =0.7.1 / gpui-pre =0.3.8 with runtime_shaders",
+  "startup_first_frame_ms": {
+    "release": { "runs": 10, "p50": 152.5, "min": 146.4, "first_run_after_build": 1124.3 },
+    "debug":   { "runs": 5,  "p50": 165.7, "first_run_after_build": 1263.3 },
+    "note": "first_run_after_build includes macOS first-launch scanning of a new binary (to_main 347 ms) and a cold Metal shader cache; it is excluded from p50 by construction. Budget: < 500 ms p50 (release)."
+  },
+  "idle_release": {
+    "phys_footprint_mb": 75,
+    "cpu_percent_avg_30s": 0.38,
+    "idle_wakeups_per_s_avg_30s": 76.1,
+    "budgets": { "phys_footprint_mb_no_terminals": 60, "cpu_percent": 0.3, "devdesk_timer_wakeups": 0 },
+    "status": "OVER budget on all three; investigate in M1 (see technical-research A11)"
+  }
+}

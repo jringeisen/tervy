@@ -1,0 +1,31 @@
+[workspace]
+resolver = "3"
+members = ["crates/devdesk-term", "crates/devdesk-core", "crates/devdesk-app"]
+default-members = ["crates/devdesk-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
+
+# Exact pins (ADR-002, ADR-003): GPUI and alacritty_terminal both break between
+# minor versions. Upgrade deliberately, between milestones, in a dedicated commit.
+[workspace.dependencies]
+gpui-kit = "=0.7.1"
+alacritty_terminal = "=0.26.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "env-filter"] }
+
+devdesk-term = { path = "crates/devdesk-term" }
+devdesk-core = { path = "crates/devdesk-core" }
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[profile.release]
+debug = "line-tables-only"
