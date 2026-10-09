@@ -211,6 +211,8 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 - Asking the side pane to edit a file → refused by the tool layer; the file is unchanged (`git status` clean).
 - Closing the side pane leaves no process behind.
 
+**M5 implementation review (2026-10-08):** 🧪 Tasks 5.1–5.5 implemented and autonomously validated under the owner's authorization. Five interactive Claude forks pass enforcement and inherited-reasoning checks while a two-minute parent completes; supervisor and native split probes pass. See [M5 review](m5-review.md). Account-registry/model-inheritance coverage limits and the first-launch budget miss are recorded explicitly.
+
 ---
 
 ## M6 — Codex provider (M)

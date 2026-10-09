@@ -35,6 +35,8 @@ fn record(project: &str, folder: &std::path::Path) -> Record {
         name: "Saved Claude".into(),
         cwd: folder.into(),
         role: Role::Primary,
+        parent: None,
+        snapshot_at: None,
         session_id: Some(uuid::Uuid::new_v4().to_string()),
     }
 }

@@ -47,7 +47,10 @@ impl Store {
     }
     pub fn delete_agent(&self, id: &str) -> Result<(), String> {
         self.connection
-            .execute("DELETE FROM agents WHERE id=?1", [id])
+            .execute(
+                "DELETE FROM agents WHERE id=?1 OR json_extract(record, '$.parent')=?1",
+                [id],
+            )
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -229,6 +232,8 @@ mod persistence_tests {
             name: "Agent".into(),
             cwd: PathBuf::from("/tmp/record-cwd"),
             role: crate::agent::Role::Side,
+            parent: None,
+            snapshot_at: None,
             session_id: Some(uuid::Uuid::new_v4().to_string()),
         };
         store.save_agent(&record).unwrap();

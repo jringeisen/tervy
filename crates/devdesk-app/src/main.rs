@@ -143,6 +143,7 @@ fn install_menus_and_keys(cx: &mut App) {
         KeyBinding::new("cmd-t", NewTerminal, Some("Workspace")),
         KeyBinding::new("cmd-w", CloseTerminal, Some("Workspace")),
         KeyBinding::new("cmd-shift-r", RenameTerminal, Some("Workspace")),
+        KeyBinding::new("cmd-shift-a", AskAgentQuestion, Some("Workspace")),
         KeyBinding::new("cmd-o", AddProject, Some("Workspace")),
         KeyBinding::new("cmd-shift-]", NextTab, Some("Workspace")),
         KeyBinding::new("cmd-shift-[", PreviousTab, Some("Workspace")),

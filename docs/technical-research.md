@@ -340,6 +340,16 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 - 🧪 Owner requested removal controls for projects/processes/agents; real-session tests cover cleanup, preservation of files/unrelated configuration, and no restored deleted agents. Both Tab binding revisions failed owner review. 🧪 Right Arrow accepts Claude's muted suggestion; the owner accepted this workaround. Tab acceptance remains unresolved, with opt-in Tab-only diagnostics available.
 - ❓ Interactive status, approvals, CLI picker, rename and same-layout/same-conversation restore await owner acceptance in [M4 review](m4-review.md).
 
+### 10h. M5 Claude side conversations (2026-10-08)
+
+- 🧪 `cargo test -p devdesk-core --test claude_interactive -- --ignored --nocapture` drives the interactive CLI through the actual terminal crate. Claude 2.1.295, OAuth, Haiku; only synthetic fixture data is sent. Five forks receive distinct `SessionStart(source=fork)` identities, inherit BLUEHERON and the synthetic design reason, refuse Write/Edit/Bash, and leave all canaries unchanged. The parent waits at least 120 seconds, then completes. All owned sessions are empty after close.
+- 🧪 All five answers retain the supplied kitty-protocol design reason and avoid claiming that forking stopped the parent. They honestly report that a snapshot cannot verify its live status; this is not a claim that they can monitor the parent.
+- 🧪 Initial harness failures: standalone `sleep` was rejected before the fork; the TUI trust dialog needed separately timed Down/Enter input. The final fixture uses bounded Python waiting and confirms only its own fresh directory. An initially overstrict test rejected an honest “unknown” parent status; the final criterion matches the acceptance list (no false parent-stop claim).
+- 🧪 Complete Fork argv and role downgrade tests pass. A real-PTY synthetic CLI integration covers fork identity/cwd/persistence, side-only stop, hardened same-fork Resume and cascading parent removal. Restore retains Side records as closed history without automatically launching them. No transcript or rollout files are read.
+- 🧪 `DEVDESK_PERF_LAYOUT=side target/release/devdesk` renders synthetic mirrors in a native window without launching a CLI: split widths 480/480 px; parent expands to 960 px after closing the side; history reopens and the one-line question input is reachable. This verifies geometry and state, not a screenshot or human review.
+- 🧪 `ShareOnboardingGuide` is explicitly disallowed and accepted in interactive argv. No account action was invoked. ❓ Independent enumeration of the interactive tool registry and third-party provider/model inheritance remain unverified; no model self-report is treated as security proof.
+- 🧪 Release startup p50 169.0 ms, first/p95 589.9 ms (10 runs, same `normal` benchmark layout as M4). Median changes +0.69%; first launch still misses 500 ms. No new idle or stress pass is claimed; M7 owns those gates.
+
 ## 11. Library compatibility and licensing
 
 - **Version coupling:** `gpui-component` pins `gpui-pre` exactly, and every GPUI-dependent crate must match that pin. Upgrades happen as one unit ("bump gpui-kit").
@@ -370,7 +380,7 @@ All the risks in one place. Details are in the sections referenced.
 | T12 | **Codex shared daemon:** killing the TUI doesn't stop work | High if missed | `--no-daemon` on every Codex invocation (ADR-022) | §9 |
 | T13 | **Codex hook trust:** injected hooks skipped | Medium | notify + BEL + input heuristics; app-server later | §9 |
 | T14 | **Fork snapshot accuracy:** in-flight tool calls appear aborted | Medium (verified) | Observer preamble (accuracy only) | §8, §9 |
-| T15 | **Interactive-mode enforcement unverified** (all enforcement tests ran headless) | Medium | First acceptance test of M5/M6; headless-fork fallback | A3, A4 |
+| T15 | **Codex interactive enforcement remains unverified** | Medium | M6 first enforcement gate; headless-fork fallback. 🧪 Claude passes M5 (§10h) | A3, A4 |
 | T16 | **Codex MCP servers and plugins bypass the shell sandbox** in "read-only" forks | High (verified C1) | Disable every configured server + action features per launch; fail closed (C2) | Appendix C1/C2 |
 | T17 | **Login vs interactive shell PATH differences** (nvm in `.zshrc`, `path_helper` reordering) | High (verified S1) | Resolve env once with `-l -i`; spawn processes with `$SHELL -c` (ADR-026) | Appendix S1 |
 
@@ -380,13 +390,13 @@ All the risks in one place. Details are in the sections referenced.
 |---|---|---|---|
 | A1 | A CLT-only build works with `runtime_shaders` | Must install Xcode + MetalToolchain (~hours) | ✅ **Verified in M0**: builds and renders with Command Line Tools only (`gpui-kit` 0.7.1 enables `runtime_shaders` on `gpui-pre-platform`). No Xcode needed |
 | A2 | Runtime shader compilation stays within the cold-start budget | Need offline shaders, so Xcode is required | **Partly verified in M0:** original machine release p50 152 ms, first launch after rebuild ~1.1 s. 🧪 Replacement machine: p50 169.9 ms, first launch 473.2 ms included in the ten-run sample (§10b). M1 first-frame and content measurements are recorded separately in §10d / `perf/baseline-m1.json`; true cold-cache shader compile remains unverified |
-| A3 | Claude `--tools` / `--disallowedTools` / `--strict-mcp-config` enforce in **interactive** mode as they do in `-p` | Side conversations not read-only. Fall back to approach B (headless `-p`) | M5 (first acceptance test) |
+| A3 | Claude `--tools` / `--disallowedTools` / `--strict-mcp-config` enforce in **interactive** mode as they do in `-p` | Side conversations not read-only. Fall back to approach B (headless `-p`) | 🧪 M5 passes, Claude 2.1.295; §10h and m5-review.md |
 | A4 | `codex fork -s read-only` enforces the same in the interactive TUI with `--no-daemon` | Same | M6 |
 | A5 | `--settings` hooks add to, rather than replace, the user's hooks | Could disable the user's own hooks | 🧪 M4: Claude 2.1.295, temporary user-level + injected Setup hooks both fired with the same ID using `--init-only`; real user settings unchanged (§10g) |
 | A6 | `codex -c notify=[…]` and `-c tui.*` work in the interactive TUI and force embedded mode | Status degrades to exited/running only | M6 |
 | A7 | Children spawned via alacritty `tty` start with default signal dispositions and mask | Children ignore SIGINT/SIGPIPE, so graceful stop fails | M1 |
 | A8 | One OS thread per PTY is acceptable at 20–40 terminals | Need a shared `polling`-based reader | M7 benchmark |
-| A9 | gpui-component's input, list, tabs and resizable cover the palette, tabs and split | More custom UI work | 🧪 M2 Input/Command/TabBar compile and run; subsequence fuzzy matching is custom. Production resizable split verification remains M5 (§10e). |
+| A9 | gpui-component's input, list, tabs and resizable cover the palette, tabs and split | More custom UI work | 🧪 M2 Input/Command/TabBar compile and run; subsequence fuzzy matching is custom. 🧪 M5 native render smoke verifies equal split geometry, side-only close, history reopen and question input (§10h). |
 | A11 | An idle GPUI window is near-zero CPU with no periodic wakeups | Idle budgets unreachable without upstream changes | **M0 measured: over budget.** 🧪 Replacement machine: 61 MB, 0.553% CPU, 0.788 process idle wakeups/s from counter deltas (§10b). Original machine reported 75 MB, 0.38% CPU, ~76 wakeups/s; ❓ its wakeup rate needs raw-sample validation because default `top` counters are cumulative. **M1 investigated before terminals:** sidebar/blank controls retain CoreVideo callbacks; no app-facing stop/rearm API (§10c). Not fixed. Final idle-shell sample is in `perf/baseline.json` |
 | A10 | Scrollback memory ≈ 24 B/cell (alacritty `Cell`) | Budget recalculation | 🧪 **Verified as an inline floor:** 24 B/cell; measured headless peaks ~19.1 MB plain/styled, ~19.7 MB links, ~77.0 MB all-combining at 120 columns/5,000 history (§10d). Bounded metadata patches required |
 

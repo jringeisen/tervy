@@ -1,5 +1,6 @@
 //! UI mirror of the supervisor. All terminal entities remain alive across tab
 //! and project switches; only selected entities are attached to the render tree.
+mod side_smoke;
 use crate::terminal_view::TerminalView;
 use devdesk_core::config::{Config, Project};
 use devdesk_core::supervisor::{
@@ -9,6 +10,7 @@ use devdesk_core::{agent, layout};
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::resizable::{h_resizable, resizable_panel};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -22,6 +24,7 @@ gpui_kit::actions!(
         NewTerminal,
         CloseTerminal,
         RenameTerminal,
+        AskAgentQuestion,
         AddProject,
         NextTab,
         PreviousTab,
@@ -64,6 +67,7 @@ enum PaletteAction {
     Recover,
     LaunchClaude(bool),
     ResumeAgent(SessionId),
+    Ask,
 }
 
 pub struct Workspace {
@@ -89,6 +93,10 @@ pub struct Workspace {
     palette_open: bool,
     palette_query: String,
     rename: Option<SessionId>,
+    question_parent: Option<SessionId>,
+    /// Only the UI owns split presentation; each PTY remains actor-owned.
+    side_panes: BTreeMap<SessionId, SessionId>,
+    side_focus: Option<SessionId>,
     rename_input: Entity<InputState>,
     prompt_pending: bool,
     shutdown: Option<usize>,
@@ -131,6 +139,10 @@ impl Workspace {
             }
             let _ = weak.update(cx, |this, cx| {
                 this.ready = true;
+                if this.perf_layout == "side" {
+                    this.smoke_side(window, cx);
+                    return;
+                }
                 if this.stress.is_some() {
                     this.start_stress();
                     return;
@@ -169,6 +181,9 @@ impl Workspace {
             palette_open: false,
             palette_query: String::new(),
             rename: None,
+            question_parent: None,
+            side_panes: BTreeMap::new(),
+            side_focus: None,
             rename_input,
             prompt_pending: false,
             shutdown: None,
@@ -194,7 +209,9 @@ impl Workspace {
             .copied()
             .filter(|id| {
                 self.tabs.get(id).is_some_and(|tab| {
-                    tab.open && Some(&tab.info.project) == self.active_project.as_ref()
+                    tab.open
+                        && !is_side(&tab.info)
+                        && Some(&tab.info.project) == self.active_project.as_ref()
                 })
             })
             .collect()
@@ -226,7 +243,7 @@ impl Workspace {
                             .get(&saved_tab.key)
                             .and_then(|id| self.tabs.get_mut(id))
                         {
-                            tab.open = saved_tab.open;
+                            tab.open = saved_tab.open && !is_side(&tab.info);
                         }
                     }
                     self.expanded = layout.expanded.into_iter().collect();
@@ -367,11 +384,22 @@ impl Workspace {
                     let id = info.id;
                     let open = info.agent.is_none()
                         || !matches!(info.status, SessionStatus::Exited { .. });
-                    if info.process.is_none() && open {
+                    let side = is_side(&info);
+                    if info.process.is_none() && open && !side {
                         self.selected.insert(info.project.clone(), id);
                     }
                     self.tab_order.push(id);
-                    self.tabs.insert(id, ShellTab { info, view, open });
+                    self.tabs.insert(
+                        id,
+                        ShellTab {
+                            info,
+                            view,
+                            open: open && !side,
+                        },
+                    );
+                    if side && open && !self.restoring {
+                        self.open_side(id);
+                    }
                     self.update_visibility(window, cx);
                 }
             }
@@ -412,6 +440,8 @@ impl Workspace {
                 }
             }
             CoreEvent::SessionClosed(id) => {
+                self.side_panes
+                    .retain(|parent, side| *parent != id && *side != id);
                 self.tab_order.retain(|candidate| *candidate != id);
                 if let Some(tab) = self.tabs.remove(&id)
                     && self.selected.get(&tab.info.project) == Some(&id)
@@ -544,7 +574,19 @@ impl Workspace {
         let mut rows = v_flex()
             .gap_1()
             .child(div().pl_3().pt_2().text_xs().child("Agents"));
-        for (id, tab) in &self.tabs {
+        let mut agents: Vec<_> = self
+            .tabs
+            .iter()
+            .filter(|(_, tab)| tab.info.agent.is_some())
+            .collect();
+        agents.sort_by_key(|(id, tab)| {
+            (
+                self.side_parent(**id).unwrap_or(**id),
+                is_side(&tab.info),
+                **id,
+            )
+        });
+        for (id, tab) in agents {
             if tab.info.project != project {
                 continue;
             }
@@ -571,6 +613,7 @@ impl Workspace {
             rows = rows.child(
                 h_flex()
                     .pl_3()
+                    .when(is_side(&tab.info), |row| row.pl_6())
                     .gap_2()
                     .child(
                         h_flex()
@@ -594,7 +637,15 @@ impl Workspace {
                                     })
                                     .child("●"),
                             )
-                            .child(format!("{} · {status}", tab.info.name))
+                            .child(format!(
+                                "{}{} · {status}",
+                                if is_side(&tab.info) {
+                                    "↳ Read-only · "
+                                } else {
+                                    ""
+                                },
+                                tab.info.name
+                            ))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.choose_tab(id, window, cx)
                             })),
@@ -694,6 +745,9 @@ impl Workspace {
     }
     fn visible_ids(&self) -> Vec<SessionId> {
         let mut ids = self.active().into_iter().collect::<Vec<_>>();
+        if let Some(side) = self.active().and_then(|id| self.side_panes.get(&id)) {
+            ids.push(*side);
+        }
         if self.stress.is_some() {
             for id in [SessionId(11), SessionId(1), SessionId(2)] {
                 if ids.len() < 3 && self.tabs.contains_key(&id) && !ids.contains(&id) {
@@ -886,7 +940,52 @@ impl Workspace {
             });
         }
     }
+    fn side_parent(&self, id: SessionId) -> Option<SessionId> {
+        let parent = self
+            .tabs
+            .get(&id)?
+            .info
+            .agent
+            .as_ref()?
+            .record
+            .parent
+            .as_ref()?;
+        self.tabs
+            .iter()
+            .find(|(_, tab)| {
+                tab.info
+                    .agent
+                    .as_ref()
+                    .is_some_and(|info| &info.record.id == parent)
+            })
+            .map(|(id, _)| *id)
+    }
+    fn open_side(&mut self, id: SessionId) {
+        let Some(parent) = self.side_parent(id) else {
+            return;
+        };
+        if let Some(previous) = self.side_panes.insert(parent, id)
+            && previous != id
+        {
+            self.core.send(CoreCommand::Close {
+                id: previous,
+                confirmed: None,
+            });
+        }
+        self.side_focus = Some(id);
+        let project = self.tabs[&parent].info.project.clone();
+        self.tabs.get_mut(&parent).unwrap().open = true;
+        self.active_project = Some(project.clone());
+        self.selected.insert(project, parent);
+    }
     fn choose_tab(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.tabs.get(&id).is_some_and(|tab| is_side(&tab.info)) {
+            self.open_side(id);
+            self.update_visibility(window, cx);
+            cx.notify();
+            return;
+        }
+        self.side_focus = None;
         if let Some(tab) = self.tabs.get_mut(&id) {
             tab.open = true;
             self.active_project = Some(tab.info.project.clone());
@@ -927,18 +1026,32 @@ impl Workspace {
         }
     }
     fn close_terminal(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
-        if self.rename.is_some() || self.palette_open {
+        if self.rename.is_some() || self.question_parent.is_some() || self.palette_open {
+            self.question_parent = None;
             self.rename = None;
             self.palette_open = false;
             self.restore_focus(window, cx);
             cx.notify();
             return;
         }
-        if let Some(id) = self.active() {
+        let focused_side = self
+            .active()
+            .and_then(|id| self.side_panes.get(&id))
+            .copied()
+            .filter(|id| self.tabs[id].view.read(cx).focus.is_focused(window));
+        if let Some(id) = focused_side.or_else(|| self.active()) {
             self.close_tab(id, window, cx);
         }
     }
     fn close_tab(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(side) = self.side_panes.remove(&id) {
+            self.core.send(CoreCommand::Close {
+                id: side,
+                confirmed: None,
+            });
+        }
+        self.side_panes.retain(|_, side| *side != id);
+        self.side_focus = None;
         self.core.send(CoreCommand::Close {
             id,
             confirmed: None,
@@ -957,7 +1070,9 @@ impl Workspace {
             let next = self
                 .tabs
                 .iter()
-                .find(|(_, candidate)| candidate.open && candidate.info.project == project)
+                .find(|(_, candidate)| {
+                    candidate.open && !is_side(&candidate.info) && candidate.info.project == project
+                })
                 .map(|(id, _)| *id);
             if let Some(next) = next {
                 self.selected.insert(project, next);
@@ -994,10 +1109,42 @@ impl Workspace {
                 _ => {}
             }));
     }
+    fn ask_agent_question(
+        &mut self,
+        _: &AskAgentQuestion,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(id) = self.active() else { return };
+        let tab = &self.tabs[&id];
+        if !tab.info.agent.as_ref().is_some_and(|agent| {
+            agent.record.role == agent::Role::Primary
+                && agent.record.session_id.is_some()
+                && agent.status != agent::Status::Launching
+        }) || tab.info.status != SessionStatus::Running
+        {
+            self.error = Some("Select a running agent with a known session ID".into());
+            cx.notify();
+            return;
+        }
+        self.rename = None;
+        self.question_parent = Some(id);
+        self.rename_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
     fn rename_terminal(&mut self, _: &RenameTerminal, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(id) = self.active()
+        let side = self
+            .active()
+            .and_then(|id| self.side_panes.get(&id))
+            .copied()
+            .filter(|id| self.tabs[id].view.read(cx).focus.is_focused(window));
+        if let Some(id) = side.or_else(|| self.active())
             && let Some(tab) = self.tabs.get(&id)
         {
+            self.question_parent = None;
             self.rename = Some(id);
             self.rename_input.update(cx, |input, cx| {
                 input.set_value(tab.info.name.clone(), window, cx);
@@ -1007,6 +1154,12 @@ impl Workspace {
         }
     }
     fn save_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(parent) = self.question_parent.take() {
+            self.core.send(CoreCommand::ForkAgent {
+                parent,
+                question: self.rename_input.read(cx).value().to_string(),
+            });
+        }
         if let Some(id) = self.rename.take() {
             self.core.send(CoreCommand::Rename {
                 id,
@@ -1018,7 +1171,9 @@ impl Workspace {
     }
     fn restore_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
         let focus = self
-            .active()
+            .side_focus
+            .filter(|id| self.visible_ids().contains(id))
+            .or_else(|| self.active())
             .and_then(|id| self.tabs.get(&id))
             .map(|tab| tab.view.read(cx).focus.clone())
             .unwrap_or_else(|| self.focus.clone());
@@ -1039,6 +1194,7 @@ impl Workspace {
             ("Close Terminal".into(), PaletteAction::Close),
             ("Rename Terminal".into(), PaletteAction::Rename),
             ("Add Project…".into(), PaletteAction::Add),
+            ("Ask Agent Question…".into(), PaletteAction::Ask),
         ];
         actions.extend(self.projects.iter().map(|project| {
             (
@@ -1102,6 +1258,7 @@ impl Workspace {
             PaletteAction::Close => self.close_terminal(&CloseTerminal, window, cx),
             PaletteAction::Rename => self.rename_terminal(&RenameTerminal, window, cx),
             PaletteAction::Add => self.add_project(&AddProject, window, cx),
+            PaletteAction::Ask => self.ask_agent_question(&AskAgentQuestion, window, cx),
             PaletteAction::Start(id) => self.core.send(CoreCommand::Start(id)),
             PaletteAction::Stop(id) => self.core.send(CoreCommand::Stop(id)),
             PaletteAction::Restart(id) => self.core.send(CoreCommand::Restart(id)),
@@ -1121,7 +1278,7 @@ impl Workspace {
                 self.core.send(CoreCommand::ResumeAgent(id));
             }
         }
-        if self.rename.is_none() {
+        if self.rename.is_none() && self.question_parent.is_none() {
             self.restore_focus(window, cx);
         }
         cx.notify();
@@ -1434,7 +1591,50 @@ impl Render for Workspace {
             );
         let visible = self.visible_ids();
         let mut content = v_flex().flex_1().min_w_0().h_full().child(tabs);
-        if !visible.is_empty() {
+        if let Some(side) = self
+            .active()
+            .and_then(|id| self.side_panes.get(&id))
+            .copied()
+        {
+            let parent = self.active().unwrap();
+            let record = &self.tabs[&side].info.agent.as_ref().unwrap().record;
+            let chrome = format!(
+                "Read-only · snapshot at {} · of {}",
+                agent::snapshot_label(record.snapshot_at),
+                self.tabs[&parent].info.name
+            );
+            let side_pane = v_flex()
+                .size_full()
+                .min_w_0()
+                .min_h_0()
+                .child(
+                    h_flex()
+                        .px_2()
+                        .py_1()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(div().flex_1().child(chrome))
+                        .child(div().id("close-side").cursor_pointer().child("×").on_click(
+                            cx.listener(move |this, _, window, cx| {
+                                this.close_tab(side, window, cx)
+                            }),
+                        )),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .child(self.tabs[&side].view.clone()),
+                );
+            content = content.child(
+                div().flex_1().min_h_0().child(
+                    h_resizable(("agent-split", parent.0))
+                        .child(resizable_panel().child(self.tabs[&parent].view.clone()))
+                        .child(resizable_panel().child(side_pane)),
+                ),
+            );
+        } else if !visible.is_empty() {
             let mut panes = h_flex().flex_1().min_h_0().min_w_0();
             for id in visible {
                 if let Some(tab) = self.tabs.get(&id) {
@@ -1470,17 +1670,31 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .key_context("Workspace")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if this.rename.is_some() && event.keystroke.key == "escape" {
+                if event.keystroke.key == "escape"
+                    && (this.rename.is_some() || this.question_parent.is_some())
+                {
+                    this.question_parent = None;
                     this.rename = None;
                     this.restore_focus(window, cx);
                     cx.stop_propagation();
                     cx.notify();
+                } else if event.keystroke.key == "escape"
+                    && !this.palette_open
+                    && let Some(side) = this
+                        .active()
+                        .and_then(|id| this.side_panes.get(&id))
+                        .copied()
+                    && this.tabs[&side].view.read(cx).focus.is_focused(window)
+                {
+                    this.close_tab(side, window, cx);
+                    cx.stop_propagation();
                 }
             }))
             .on_action(cx.listener(Self::show_palette))
             .on_action(cx.listener(Self::new_terminal))
             .on_action(cx.listener(Self::close_terminal))
             .on_action(cx.listener(Self::rename_terminal))
+            .on_action(cx.listener(Self::ask_agent_question))
             .on_action(cx.listener(Self::add_project))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.step_tab(1, window, cx)))
             .on_action(
@@ -1550,7 +1764,7 @@ impl Render for Workspace {
                     .child(div().w(px(560.)).h_auto().child(palette)),
             );
         }
-        if self.rename.is_some() {
+        if self.rename.is_some() || self.question_parent.is_some() {
             body = body.child(
                 div()
                     .absolute()
@@ -1567,7 +1781,11 @@ impl Render for Workspace {
                             .gap_3()
                             .rounded_lg()
                             .bg(bg)
-                            .child("Rename terminal")
+                            .child(if self.question_parent.is_some() {
+                                "Ask Agent Question · read-only snapshot"
+                            } else {
+                                "Rename terminal"
+                            })
                             .child(Input::new(&self.rename_input))
                             .child(
                                 h_flex()
@@ -1576,7 +1794,11 @@ impl Render for Workspace {
                                         div()
                                             .id("rename-save")
                                             .cursor_pointer()
-                                            .child("Save ↵")
+                                            .child(if self.question_parent.is_some() {
+                                                "Ask ↵"
+                                            } else {
+                                                "Save ↵"
+                                            })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.save_rename(window, cx)
                                             })),
@@ -1588,6 +1810,7 @@ impl Render for Workspace {
                                             .child("Cancel")
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.rename = None;
+                                                this.question_parent = None;
                                                 this.restore_focus(window, cx);
                                                 cx.notify();
                                             })),
@@ -1616,6 +1839,12 @@ impl Render for Workspace {
         }
         body.into_any_element()
     }
+}
+
+fn is_side(info: &SessionInfo) -> bool {
+    info.agent
+        .as_ref()
+        .is_some_and(|agent| agent.record.role == agent::Role::Side)
 }
 
 #[cfg(test)]

@@ -1,0 +1,54 @@
+{
+  "recorded": "2026-10-08",
+  "evidence": "\ud83e\uddea measured locally",
+  "milestone": "M5",
+  "machine": "Mac14,6 / Apple M2 Max / 96 GB / macOS 27.0.1 (26A434)",
+  "claude_version": "2.1.295",
+  "interactive_enforcement": {
+    "trials": 5,
+    "context_reason_retained": 5,
+    "false_parent_stop_claims": 0,
+    "canaries_unchanged": true,
+    "distinct_fork_ids": true,
+    "parent_minimum_wait_seconds": 120,
+    "parent_completed": true,
+    "all_probe_owned_sessions_empty": true,
+    "elapsed_seconds": 125.94,
+    "synthetic_data_only": true,
+    "account_tool_actions_invoked": false
+  },
+  "native_split_smoke": {
+    "left_width_px": 480,
+    "right_width_px": 480,
+    "parent_after_close_px": 960,
+    "parent_retained": true,
+    "history_reopened": true,
+    "question_input": true
+  },
+  "startup_first_frame_ms": {
+    "samples": [
+      589.9,
+      168.9,
+      172.2,
+      175.9,
+      169.1,
+      162.1,
+      174.7,
+      167.0,
+      164.0,
+      167.4
+    ],
+    "p50": 169.0,
+    "p95": 589.9,
+    "first_after_build": 589.9,
+    "budget_p50_ms": 500,
+    "median_change_vs_m4_percent": 0.6851355376824575
+  },
+  "limitations": [
+    "No independent interactive account tool registry enumeration",
+    "Third-party auth/model inheritance unverified",
+    "No human split-pane review while owner unavailable",
+    "First post-build launch exceeds 500 ms",
+    "Idle/wakeup and 20-terminal stress gates pending M7"
+  ]
+}

@@ -280,12 +280,11 @@ UX: in an agent pane, press **Cmd-Shift-A** (or choose "Ask Agent Question" in t
 
 ```
 claude --resume <parent-session-id> --fork-session
-       --name "Ask · <parent display name>"
        --settings <HOOKS_JSON>
        --restricted
        --strict-mcp-config
        --tools=Read,Grep,Glob
-       --disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*
+       --disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*,ShareOnboardingGuide
        --disable-slash-commands
        --permission-mode=dontAsk
        "<OBSERVER PREAMBLE + user's question>"
@@ -301,13 +300,15 @@ claude --resume <parent-session-id> --fork-session
 | `--permission-mode=dontAsk` | Anything that would prompt is denied, so the pane never waits on approvals | 📘✅ |
 | `--settings` hooks | Status + **fork session ID** via `SessionStart(source=fork)` | 🧪 (A6, and under `--restricted` in A7) |
 
-🧪 **This exact argv was run end to end (A7, `-p` mode):** it parses, `SessionStart(source=fork)` fires under `--restricted`, and write attempts fail with files unchanged. Interactive TUI mode is still ❓ (A3), and that is M5's first test. The fork's cwd **must** be the parent record's cwd (§3.3).
+🧪 **This exact argv was run end to end (A7, `-p` mode):** it parses, `SessionStart(source=fork)` fires under `--restricted`, and write attempts fail with files unchanged. 🧪 Interactive TUI enforcement now passes in M5 (Claude 2.1.295); five synthetic forks inherited context, refused Write/Edit/Bash, and left the canaries unchanged while a two-minute parent task completed. See [M5 review](m5-review.md). The fork's cwd **must** be the parent record's cwd (§3.3).
 
 **`--restricted` side effects:** it ignores user, project and local settings files. That includes their `env`, `model`, `apiKeyHelper` and third-party provider (Bedrock/Vertex) settings, not just permissions. This user authenticates with OAuth, which works (🧪 A4/A7). For other setups, the fork could use a different model or fail to authenticate. Mitigations:
 - pass `--model <parent's model>` when known (from the `SessionStart` payload or the record);
 - if auth fails in a side conversation, show "side conversations need OAuth or `ANTHROPIC_API_KEY`" instead of a raw error.
 
-**Known residual:** `ShareOnboardingGuide` (a claude.ai account tool) appeared in A4. ❓ Confirm in M5 whether `--disallowedTools` can name it, and document any remaining account-level tools. None of them can modify the project.
+**Account tools:** 🧪 M5 interactive argv accepts an explicit `ShareOnboardingGuide` entry in `--disallowedTools`; production forks now always include it. 📘 The named deny flag removes that tool, while `--disable-slash-commands` removes Skill and strict MCP excludes external servers. No account tool was invoked. ❓ The interactive tool registry cannot be independently enumerated through a documented CLI interface; model self-reports are not proof that all future account tools are absent.
+
+🧪 DevDesk persists the question as its sidebar display name, parent identity and snapshot time. It does not rename the parent's CLI conversation. Side history restores closed; Resume targets its captured fork ID and reapplies every read-only flag. M4 records remain compatible through defaulted JSON fields. ❓ The current documented hook projection does not capture the parent's model, so model inheritance cannot be guaranteed under `--restricted`. OAuth is verified here; other provider/auth configurations remain untested.
 
 ### 5.4 Codex side conversation
 
@@ -408,7 +409,7 @@ Side conversations are listed under their parent and can be resumed (same read-o
 | R6 | `--settings` hooks replace the user's hooks | Low | Medium | M4 probe (A5) |
 | R7 | Claude `--bg` or Codex daemon defaults change further | Medium | Medium | `--no-daemon` is explicit. Probe script checks that stop really stops |
 | R8 | Hook helper latency slows agents | Low | Medium | 200 ms connect timeout, minimal helper, measured in M4 |
-| R9 | Account-level tools (e.g. `ShareOnboardingGuide`) remain in read-only forks | Verified | Low (no project writes) | Document. Disallow by name if possible |
+| R9 | Account-level tools in read-only forks | Mitigated; future tools ❓ | Low (no project writes) | 🧪 M5 explicitly disallows `ShareOnboardingGuide`; no account action invoked |
 | R10 | **Codex MCP servers and plugins bypass the shell sandbox** in side conversations | Verified (C1) | **High** | Disable every configured server + action features (C2). Fail closed if config is unreadable. Re-check when the user adds MCP servers |
 | R11 | A side record resumed with primary (writable) flags | Low | High | `LaunchProfile` derived from the record's role. Golden tests for every path |
 | R12 | Stale hook/notify from a previous instance | Medium | Low | `LaunchId` generation check |

@@ -15,7 +15,7 @@ fn event(runtime: &Supervisor, deadline: Instant) -> CoreEvent {
     }
 }
 #[test]
-fn restores_shell_cwd_and_agent_stub_without_launching_agent_or_side_record() {
+fn restores_shell_cwd_and_agent_stub_without_launching_primary_or_side_records() {
     let folder = std::env::temp_dir().join(format!("devdesk-restore-{}", std::process::id()));
     let nested = folder.join("nested");
     std::fs::create_dir_all(&nested).unwrap();
@@ -35,6 +35,8 @@ fn restores_shell_cwd_and_agent_stub_without_launching_agent_or_side_record() {
         name: "Saved Claude".into(),
         cwd: folder.clone(),
         role: Role::Primary,
+        parent: None,
+        snapshot_at: None,
         session_id: Some(uuid::Uuid::new_v4().to_string()),
     };
     store.save_agent(&record).unwrap();
@@ -42,6 +44,8 @@ fn restores_shell_cwd_and_agent_stub_without_launching_agent_or_side_record() {
         .save_agent(&Record {
             id: uuid::Uuid::new_v4().to_string(),
             role: Role::Side,
+            parent: Some(record.id.clone()),
+            snapshot_at: Some(1_791_518_400),
             ..record.clone()
         })
         .unwrap();
@@ -81,8 +85,10 @@ fn restores_shell_cwd_and_agent_stub_without_launching_agent_or_side_record() {
         match event(&runtime, deadline) {
             CoreEvent::SessionChanged(info) if info.agent.is_some() => {
                 let agent = info.agent.unwrap();
-                assert_eq!(agent.record.id, record.id);
-                assert_eq!(agent.record.session_id, record.session_id);
+                if agent.record.role == Role::Primary {
+                    assert_eq!(agent.record.id, record.id);
+                    assert_eq!(agent.record.session_id, record.session_id);
+                }
                 assert_eq!(agent.status, Status::Exited);
                 assert!(matches!(info.status, SessionStatus::Exited { .. }));
                 agents += 1;
@@ -115,7 +121,7 @@ fn restores_shell_cwd_and_agent_stub_without_launching_agent_or_side_record() {
             _ => {}
         }
     }
-    assert_eq!(agents, 1);
+    assert_eq!(agents, 2);
     layout.tabs[0].key = format!("shell:{}", shell.unwrap().0);
     layout.tabs[0].cwd = None;
     runtime.handle.send(Command::SaveLayout(layout));

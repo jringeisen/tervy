@@ -52,6 +52,10 @@ pub enum Command {
         picker: bool,
     },
     ResumeAgent(SessionId),
+    ForkAgent {
+        parent: SessionId,
+        question: String,
+    },
     RemoveSession(SessionId),
     RemoveProject(String),
     SaveLayout(layout::Layout),
@@ -675,6 +679,7 @@ impl Actor {
         }
         match command {
             Command::NewAgent { project, picker } => self.new_agent(project, picker),
+            Command::ForkAgent { parent, question } => self.fork_agent(parent, question),
             Command::ResumeAgent(id) => self.resume_agent(id),
             Command::RemoveSession(id) => self.remove_session(id),
             Command::RemoveProject(project) => self.remove_project(project),
@@ -1165,6 +1170,23 @@ impl Actor {
         let Some(entry) = self.entries.get(&id) else {
             return;
         };
+        let children: Vec<_> = entry
+            .agent
+            .as_ref()
+            .map(|runtime| &runtime.info.record.id)
+            .map(|parent| {
+                self.entries
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry
+                            .agent
+                            .as_ref()
+                            .is_some_and(|agent| agent.info.record.parent.as_ref() == Some(parent))
+                    })
+                    .map(|(id, _)| *id)
+                    .collect()
+            })
+            .unwrap_or_default();
         let result = if let Some(runtime) = &entry.agent {
             self.store
                 .as_ref()
@@ -1182,6 +1204,10 @@ impl Actor {
         if let Err(error) = result {
             self.emit(CoreEvent::ConfigError(error));
             return;
+        }
+        for child in children {
+            self.removing.insert(child);
+            self.stop(child, true, false);
         }
         self.removing.insert(id);
         self.stop(id, true, false);
@@ -1243,6 +1269,8 @@ impl Actor {
             },
             cwd: project.path.clone(),
             role: agent::Role::Primary,
+            parent: None,
+            snapshot_at: None,
             session_id: (!picker).then(|| uuid::Uuid::new_v4().to_string()),
         };
         let result = self
@@ -1260,6 +1288,83 @@ impl Actor {
                 agent::Request::ResumePicker
             } else {
                 agent::Request::New
+            },
+        );
+        self.spawn(id);
+    }
+    fn fork_agent(&mut self, parent: SessionId, question: String) {
+        let question = question.trim();
+        if question.is_empty() || question.len() > 8192 || question.contains(['\n', '\r']) {
+            self.emit(CoreEvent::ConfigError(
+                "Enter a one-line question (up to 8 KiB)".into(),
+            ));
+            return;
+        }
+        if self.recovery_pending
+            || self.orphan_check_at.is_some()
+            || self.removing.contains(&parent)
+        {
+            self.emit(CoreEvent::ConfigError(
+                "Resolve previous sessions before asking a question".into(),
+            ));
+            return;
+        }
+        let Some(entry) = self.entries.get(&parent) else {
+            return;
+        };
+        let Some(parent) = entry.agent.as_ref() else {
+            self.emit(CoreEvent::ConfigError(
+                "Select a running agent to ask a question".into(),
+            ));
+            return;
+        };
+        let record = &parent.info.record;
+        if record.role != agent::Role::Primary
+            || entry.info.status != SessionStatus::Running
+            || parent.info.status == agent::Status::Launching
+        {
+            self.emit(CoreEvent::ConfigError(
+                "Questions need a running primary agent".into(),
+            ));
+            return;
+        }
+        let Some(parent_session_id) = record.session_id.clone() else {
+            self.emit(CoreEvent::ConfigError(
+                "The agent has not reported a session ID yet".into(),
+            ));
+            return;
+        };
+        let record = agent::Record {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: record.project.clone(),
+            name: question.chars().take(48).collect(),
+            cwd: record.cwd.clone(),
+            role: agent::Role::Side,
+            session_id: None,
+            parent: Some(record.id.clone()),
+            snapshot_at: Some(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64,
+            ),
+        };
+        // Persist the role before starting any worker. Resume can only recover
+        // this role; neither a UI action nor a launch request can upgrade it.
+        if let Err(error) = self
+            .store
+            .as_ref()
+            .ok_or("Agent store unavailable".into())
+            .and_then(|store| store.save_agent(&record))
+        {
+            self.emit(CoreEvent::ConfigError(error));
+            return;
+        }
+        let id = self.agent_entry(
+            record,
+            agent::Request::Fork {
+                parent_session_id,
+                question: question.into(),
             },
         );
         self.spawn(id);
@@ -1351,6 +1456,22 @@ impl Actor {
         if runtime.rate_count > 100 {
             return;
         }
+        if let agent::Request::Fork {
+            parent_session_id, ..
+        } = &runtime.request
+            && runtime.info.record.session_id.is_none()
+            && event.event == "SessionStart"
+            && (event.session_id.is_none()
+                || event.source.as_deref() != Some("fork")
+                || event.session_id.as_ref() == Some(parent_session_id))
+        {
+            self.emit(CoreEvent::ConfigError(
+                "Claude did not report a distinct fork identity; stopping the side conversation"
+                    .into(),
+            ));
+            self.stop(id, false, false);
+            return;
+        }
         let previous = runtime.info.record.session_id.clone();
         runtime.apply(&event);
         let record =
@@ -1391,9 +1512,7 @@ impl Actor {
         let saved = layout.is_some();
         let mut layout = layout.unwrap_or_default();
         for record in records {
-            if record.role == agent::Role::Side
-                || !self.config.projects.iter().any(|p| p.id == record.project)
-            {
+            if !self.config.projects.iter().any(|p| p.id == record.project) {
                 continue;
             }
             let id = self.agent_entry(record, agent::Request::Resume);
@@ -1791,6 +1910,64 @@ mod tests {
         }
     }
     #[test]
+    fn a_side_cannot_adopt_its_parent_id_or_a_nonfork_session_start() {
+        let parent = uuid::Uuid::new_v4().to_string();
+        for (source, session_id) in [
+            ("fork", Some(parent.clone())),
+            ("resume", Some(uuid::Uuid::new_v4().to_string())),
+            ("fork", None),
+        ] {
+            let (sender, _) = mpsc::channel();
+            let (events, receiver) = async_channel::unbounded();
+            let mut actor = Actor::new(PathBuf::new(), None, sender, events);
+            let record = agent::Record {
+                id: uuid::Uuid::new_v4().to_string(),
+                project: "p".into(),
+                name: "Side".into(),
+                cwd: PathBuf::from("/tmp"),
+                role: agent::Role::Side,
+                session_id: None,
+                parent: Some(uuid::Uuid::new_v4().to_string()),
+                snapshot_at: Some(1),
+            };
+            let id = actor.agent_entry(
+                record.clone(),
+                agent::Request::Fork {
+                    parent_session_id: parent.clone(),
+                    question: "Why?".into(),
+                },
+            );
+            let entry = actor.entries.get_mut(&id).unwrap();
+            entry.info.launch = LaunchId(9);
+            entry.info.status = SessionStatus::Starting;
+            entry.exited = false;
+            let token = entry.agent.as_ref().unwrap().token.clone();
+            actor.hook(ipc::HookEvent {
+                agent_id: record.id,
+                launch: 9,
+                token,
+                event: "SessionStart".into(),
+                session_id,
+                source: Some(source.into()),
+                ..Default::default()
+            });
+            assert!(
+                actor.entries[&id]
+                    .agent
+                    .as_ref()
+                    .unwrap()
+                    .info
+                    .record
+                    .session_id
+                    .is_none()
+            );
+            assert!(
+                std::iter::from_fn(|| receiver.try_recv().ok())
+                    .any(|event| matches!(event, CoreEvent::ConfigError(_)))
+            );
+        }
+    }
+    #[test]
     fn stale_or_unauthenticated_hooks_cannot_update_agent_and_rate_is_bounded() {
         let (sender, _) = mpsc::channel();
         let (events, receiver) = async_channel::unbounded();
@@ -1801,6 +1978,8 @@ mod tests {
             name: "Claude".into(),
             cwd: PathBuf::from("/tmp"),
             role: agent::Role::Primary,
+            parent: None,
+            snapshot_at: None,
             session_id: Some(uuid::Uuid::new_v4().to_string()),
         };
         let id = actor.agent_entry(record.clone(), agent::Request::New);

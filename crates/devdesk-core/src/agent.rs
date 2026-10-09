@@ -34,12 +34,21 @@ pub struct Record {
     pub cwd: PathBuf,
     pub role: Role,
     pub session_id: Option<String>,
+    /// Stable DevDesk identity, never the provider's fork ID. Old records lack it.
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub snapshot_at: Option<i64>,
 }
 #[derive(Clone, Debug)]
 pub enum Request {
     New,
     Resume,
     ResumePicker,
+    Fork {
+        parent_session_id: String,
+        question: String,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
@@ -180,6 +189,22 @@ pub trait AgentProvider {
     fn check_installed(&self, environment: &ShellEnvironment) -> Result<PathBuf, String>;
 }
 pub struct ClaudeProvider;
+pub const OBSERVER_PREAMBLE: &str = "You are a read-only observer of a snapshot. The original session is still running in another window. An interrupted tool in this snapshot is still in progress in the original; do not retry, continue or interact with it. Answer the question using the inherited context. You cannot observe the parent’s live status.";
+
+/// Render a persisted wall-clock snapshot in local time; no timer is needed.
+pub fn snapshot_label(timestamp: Option<i64>) -> String {
+    let Some(timestamp) = timestamp else {
+        return "unknown time".into();
+    };
+    let time = timestamp as libc::time_t;
+    let mut local = std::mem::MaybeUninit::<libc::tm>::uninit();
+    // SAFETY: both pointers refer to live, correctly sized local allocations.
+    if unsafe { libc::localtime_r(&time, local.as_mut_ptr()) }.is_null() {
+        return "unknown time".into();
+    }
+    let local = unsafe { local.assume_init() };
+    format!("{:02}:{:02}", local.tm_hour, local.tm_min)
+}
 pub const EVENTS: &[&str] = &[
     "SessionStart",
     "UserPromptSubmit",
@@ -209,10 +234,13 @@ impl AgentProvider for ClaudeProvider {
     }
     fn build_launch(&self, c: &Context<'_>, env: &ShellEnvironment) -> Result<SpawnSpec, String> {
         let profile = c.record.role.profile();
-        if profile == LaunchProfile::ReadOnlySide && !matches!(c.request, Request::Resume) {
-            return Err(
-                "Side conversations require an existing session; fork support is M5".into(),
-            );
+        if profile == LaunchProfile::ReadOnlySide
+            && !matches!(c.request, Request::Resume | Request::Fork { .. })
+        {
+            return Err("Side conversations require an existing fork or parent session".into());
+        }
+        if profile == LaunchProfile::Primary && matches!(c.request, Request::Fork { .. }) {
+            return Err("A fork must persist the read-only Side role".into());
         }
         let mut args = match c.request {
             Request::New => vec![
@@ -231,6 +259,13 @@ impl AgentProvider for ClaudeProvider {
                 )?,
             ],
             Request::ResumePicker => vec!["--resume".into()],
+            Request::Fork {
+                parent_session_id, ..
+            } => vec![
+                "--resume".into(),
+                parent_session_id.clone(),
+                "--fork-session".into(),
+            ],
         };
         let command = format!("{} hook claude", shell_quote(&c.helper.to_string_lossy()));
         let hooks: serde_json::Map<String,serde_json::Value>=EVENTS.iter().map(|name| (name.to_string(),serde_json::json!([{"hooks":[{"type":"command","command":command,"timeout":5}]}]))).collect();
@@ -239,7 +274,10 @@ impl AgentProvider for ClaudeProvider {
             serde_json::json!({"hooks":hooks}).to_string(),
         ]);
         if profile == LaunchProfile::ReadOnlySide {
-            args.extend(["--restricted","--strict-mcp-config","--tools=Read,Grep,Glob","--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*","--disable-slash-commands","--permission-mode=dontAsk"].map(str::to_owned));
+            args.extend(["--restricted","--strict-mcp-config","--tools=Read,Grep,Glob","--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*,ShareOnboardingGuide","--disable-slash-commands","--permission-mode=dontAsk"].map(str::to_owned));
+        }
+        if let Request::Fork { question, .. } = c.request {
+            args.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: {question}"));
         }
         let mut variables = env.variables.clone();
         for (key, value) in [
@@ -334,6 +372,8 @@ mod tests {
             name: "Claude notes".into(),
             cwd: PathBuf::from("/tmp/stored-project"),
             role: Role::Primary,
+            parent: None,
+            snapshot_at: None,
             session_id: Some("20000000-0000-4000-8000-000000000002".into()),
         }
     }
@@ -378,6 +418,7 @@ mod tests {
                 ],
                 Request::Resume => vec!["--resume", record.session_id.as_deref().unwrap()],
                 Request::ResumePicker => vec!["--resume"],
+                Request::Fork { .. } => unreachable!(),
             };
             expected.push("--settings");
             assert_eq!(spec.args[..spec.args.len() - 1], expected);
@@ -445,11 +486,64 @@ mod tests {
                 "--restricted",
                 "--strict-mcp-config",
                 "--tools=Read,Grep,Glob",
-                "--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*",
+                "--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*,ShareOnboardingGuide",
                 "--disable-slash-commands",
                 "--permission-mode=dontAsk"
             ]
         );
+        let request = Request::Fork {
+            parent_session_id: "30000000-0000-4000-8000-000000000003".into(),
+            question: "Why this design?".into(),
+        };
+        record.session_id = None;
+        let fork = ClaudeProvider
+            .build_launch(
+                &Context {
+                    record: &record,
+                    request: &request,
+                    launch: 10,
+                    token: "t",
+                    socket: Path::new("/tmp/s"),
+                    helper: Path::new("/tmp/h"),
+                    lines: 5000,
+                },
+                &environment,
+            )
+            .unwrap();
+        let mut expected = vec![
+            "--resume".to_string(),
+            "30000000-0000-4000-8000-000000000003".into(),
+            "--fork-session".into(),
+            "--settings".into(),
+            spec.args[3].clone(),
+        ];
+        expected.extend(spec.args[4..].iter().cloned());
+        expected.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: Why this design?"));
+        assert_eq!(fork.args, expected);
+        assert_eq!(fork.cwd, record.cwd);
+        record.role = Role::Primary;
+        assert!(
+            ClaudeProvider
+                .build_launch(
+                    &Context {
+                        record: &record,
+                        request: &request,
+                        launch: 10,
+                        token: "t",
+                        socket: Path::new("/tmp/s"),
+                        helper: Path::new("/tmp/h"),
+                        lines: 5000
+                    },
+                    &environment
+                )
+                .is_err()
+        );
+        // M4 records remain readable without a schema migration.
+        let mut old = serde_json::to_value(record).unwrap();
+        old.as_object_mut().unwrap().remove("parent");
+        old.as_object_mut().unwrap().remove("snapshot_at");
+        let old: Record = serde_json::from_value(old).unwrap();
+        assert!(old.parent.is_none() && old.snapshot_at.is_none());
         std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]
