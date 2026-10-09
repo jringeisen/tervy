@@ -70,6 +70,7 @@ fn fixture(folder: &Path) {
     runtime.handle.send(Command::NewAgent {
         project: "p".into(),
         picker: false,
+        provider: devdesk_core::agent::Provider::Claude,
     });
     let (parent, parent_owned, parent_session) = running(&runtime, deadline, false);
     runtime.handle.send(Command::ForkAgent {

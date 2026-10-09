@@ -3,8 +3,9 @@
 
 use std::ops::Range;
 
+use devdesk_core::agent;
 use devdesk_core::config::Settings;
-use devdesk_core::supervisor::{Command, SessionId, SessionStatus, SupervisorHandle};
+use devdesk_core::supervisor::{Command, LaunchId, SessionId, SessionStatus, SupervisorHandle};
 use devdesk_term::keys::{self, Key, KeyEvent, KeyInput, MouseAction};
 use devdesk_term::snapshot::{Palette, RenderSnapshot};
 use devdesk_term::{
@@ -33,6 +34,8 @@ pub struct RenderedTerminal {
 
 pub struct TerminalView {
     id: SessionId,
+    launch: LaunchId,
+    provider: Option<agent::Provider>,
     core: SupervisorHandle,
     visible: bool,
     pub font_size: f32,
@@ -73,6 +76,8 @@ impl TerminalView {
         let focus = cx.focus_handle();
         let mut view = Self {
             id,
+            launch: LaunchId(0),
+            provider: None,
             core,
             visible: false,
             font_size: settings.font_size,
@@ -189,19 +194,36 @@ impl TerminalView {
         }
     }
 
+    pub fn set_agent(&mut self, info: Option<&agent::Info>, launch: LaunchId) {
+        self.launch = launch;
+        self.provider = info.map(|info| info.record.provider);
+        if info.is_some_and(|info| {
+            info.record.provider == agent::Provider::Codex
+                && info.status != agent::Status::Attention
+        }) {
+            self.bell = false;
+        }
+    }
     pub fn set_agent_stub(&mut self, cx: &mut Context<Self>) {
         self.exited = true;
-        self.status = "Claude conversation · Return to resume".into();
+        self.status = format!(
+            "{} conversation · Return to resume",
+            self.provider.map_or("Agent", agent::Provider::label)
+        );
         if self.visible {
             cx.notify();
         }
     }
 
     fn listen(&mut self, events: TerminalEvents, cx: &mut Context<Self>) {
+        let launch = self.launch;
         self.tasks.push(cx.spawn(async move |view, cx| {
             while let Ok(query) = events.queries.recv().await {
                 if view
                     .update(cx, |view, _| {
+                        if view.launch != launch {
+                            return;
+                        }
                         if let Some(session) = &view.session {
                             session
                                 .handle
@@ -219,6 +241,21 @@ impl TerminalView {
                 let done = matches!(signal, TerminalSignal::Exit);
                 if view
                     .update(cx, |view, cx| {
+                        if view.launch != launch {
+                            return;
+                        }
+                        if done
+                            && view.provider == Some(agent::Provider::Codex)
+                            && let Some(session) = &view.session
+                            && let Some(session_id) =
+                                exit_summary_id(&session.handle.snapshot(&view.palette))
+                        {
+                            view.core.send(Command::AgentExitSummary {
+                                id: view.id,
+                                launch,
+                                session_id,
+                            });
+                        }
                         // Core owns lifecycle state, including session cleanup after
                         // leader exit. This stream only coalesces output redraws.
                         if view.visible {
@@ -238,6 +275,9 @@ impl TerminalView {
             while let Ok(event) = events.events.recv().await {
                 if view
                     .update(cx, |view, cx| {
+                        if view.launch != launch {
+                            return;
+                        }
                         if let Some(session) = &view.session
                             && session
                                 .handle
@@ -247,6 +287,14 @@ impl TerminalView {
                         }
                         match event {
                             Event::Title(title) => {
+                                if view.provider == Some(agent::Provider::Codex) {
+                                    view.core.send(Command::AgentTitle {
+                                        id: view.id,
+                                        launch,
+                                        title,
+                                    });
+                                    return;
+                                }
                                 view.status = title
                                     .chars()
                                     .filter(|c| !c.is_control())
@@ -263,6 +311,12 @@ impl TerminalView {
                                 }
                             }
                             Event::Bell => {
+                                if !view.bell && view.provider == Some(agent::Provider::Codex) {
+                                    view.core.send(Command::AgentBell {
+                                        id: view.id,
+                                        launch,
+                                    });
+                                }
                                 view.bell = true;
                                 if view.visible {
                                     cx.notify();
@@ -393,6 +447,9 @@ impl TerminalView {
             return;
         }
         self.write_input(keys::encode(&input, mode, self.option_as_meta));
+        if input.key == Key::Enter {
+            self.input_notice(true);
+        }
         self.bell = false;
         window.prevent_default();
         cx.stop_propagation();
@@ -414,11 +471,22 @@ impl TerminalView {
         }
     }
 
+    fn input_notice(&self, enter: bool) {
+        if self.provider == Some(agent::Provider::Codex) {
+            self.core.send(Command::AgentInput {
+                id: self.id,
+                launch: self.launch,
+                enter,
+            });
+        }
+    }
     fn write_input(&mut self, bytes: Vec<u8>) {
         if bytes.is_empty() {
             return;
         }
         self.clipboard_notice = false;
+        self.bell = false;
+        self.input_notice(false);
         if let Some(session) = &self.session {
             {
                 let mut term = session.handle.term.lock();
@@ -853,9 +921,68 @@ impl EntityInputHandler for TerminalView {
     }
 }
 
+fn exit_summary_id(snapshot: &RenderSnapshot) -> Option<String> {
+    let mut text = String::new();
+    let mut row = None;
+    for run in &snapshot.runs {
+        if row != Some(run.row) {
+            text.push(' ');
+            row = Some(run.row);
+        }
+        text.push_str(&run.text);
+    }
+    summary_id(&text)
+}
+fn summary_id(text: &str) -> Option<String> {
+    let words: Vec<_> = text.split_whitespace().collect();
+    let prefix = [
+        "To", "continue", "this", "session,", "run", "codex", "resume",
+    ];
+    for start in (0..words.len().saturating_sub(7)).rev() {
+        if words[start..start + 7] != prefix {
+            continue;
+        }
+        // A narrow terminal can wrap the UUID across visible rows. Only gather
+        // its exact 36 characters after the public exit-summary prefix.
+        let mut id = String::new();
+        for word in &words[start + 7..] {
+            if id.len() + word.len() > 36
+                || !word.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+            {
+                break;
+            }
+            id.push_str(word);
+            if id.len() == 36 {
+                return Some(id);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod key_routing_tests {
-    use super::{SendBacktab, SendTab, key_bindings};
+    use super::{SendBacktab, SendTab, key_bindings, summary_id};
+
+    #[::core::prelude::v1::test]
+    fn codex_exit_summary_id_handles_wrapping_and_rejects_other_text() {
+        let id = "10000000-0000-4000-8000-000000000001";
+        assert_eq!(
+            summary_id(&format!("To continue this session, run codex resume {id}")),
+            Some(id.into())
+        );
+        assert_eq!(
+            summary_id(
+                "To continue this session, run codex resume 10000000-0000-4000-\n8000-000000000001"
+            ),
+            Some(id.into())
+        );
+        assert!(summary_id(&format!("codex resume {id}")).is_none());
+        assert!(
+            summary_id("To continue this session, run codex resume 10000000; touch marker")
+                .is_none()
+        );
+    }
     use gpui_kit::{KeyBinding, KeyContext, Keymap, Keystroke};
 
     #[::core::prelude::v1::test]

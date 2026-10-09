@@ -8,6 +8,20 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Provider {
+    #[default]
+    Claude,
+    Codex,
+}
+impl Provider {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     Primary,
@@ -28,6 +42,8 @@ impl Role {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Record {
+    #[serde(default)]
+    pub provider: Provider,
     pub id: String,
     pub project: String,
     pub name: String,
@@ -58,6 +74,8 @@ pub enum Status {
     NeedsApproval,
     Exited,
     TurnFailed,
+    Attention,
+    ActiveInferred,
 }
 #[derive(Clone, Debug)]
 pub struct Info {
@@ -66,6 +84,10 @@ pub struct Info {
 }
 
 pub struct Runtime {
+    /// The configured public OSC title contains a truncated current-thread UUID.
+    /// Internal title-generation turns inherit notify, so an authenticated token
+    /// alone does not prove that a notification belongs to the visible thread.
+    codex_title_prefix: Option<String>,
     pub info: Info,
     pub request: Request,
     pub token: String,
@@ -74,10 +96,14 @@ pub struct Runtime {
     pending: BTreeSet<String>,
     pub rate_window: std::time::Duration,
     pub rate_count: usize,
+    /// A single deadline exists only while activity is inferred; idle has no timer.
+    pub decay_at: Option<std::time::Duration>,
+    before_attention: Option<Status>,
 }
 impl Runtime {
     pub fn new(record: Record, request: Request) -> Self {
         Self {
+            codex_title_prefix: None,
             info: Info {
                 record,
                 status: Status::Launching,
@@ -87,20 +113,94 @@ impl Runtime {
             pending: BTreeSet::new(),
             rate_window: std::time::Duration::ZERO,
             rate_count: 0,
+            decay_at: None,
+            before_attention: None,
         }
     }
     pub fn launching(&mut self) {
+        self.codex_title_prefix = None;
         self.info.status = Status::Launching;
         self.pending.clear();
         self.token = uuid::Uuid::new_v4().to_string();
         self.rate_count = 0;
+        self.decay_at = None;
+        self.before_attention = None;
     }
     pub fn exited(&mut self) {
         self.info.status = Status::Exited;
         self.pending.clear();
+        self.decay_at = None;
+        self.before_attention = None;
+    }
+    pub fn observe_title(&mut self, title: &str) {
+        if self.info.record.provider != Provider::Codex {
+            return;
+        }
+        let prefix: String = title
+            .chars()
+            .take_while(|c| c.is_ascii_hexdigit() || *c == '-')
+            .collect();
+        if (29..=36).contains(&prefix.len())
+            && prefix.bytes().enumerate().all(|(i, c)| {
+                if [8, 13, 18, 23].contains(&i) {
+                    c == b'-'
+                } else {
+                    c.is_ascii_hexdigit()
+                }
+            })
+        {
+            self.codex_title_prefix = Some(prefix);
+        }
+    }
+    pub fn input(&mut self, enter: bool, now: std::time::Duration) {
+        if self.info.record.provider != Provider::Codex || self.info.status == Status::Exited {
+            return;
+        }
+        if self.info.status == Status::Attention {
+            self.info.status = self.before_attention.take().unwrap_or(Status::Idle);
+        }
+        if enter {
+            self.info.status = Status::ActiveInferred;
+            self.decay_at = Some(now + std::time::Duration::from_secs(600));
+        }
+    }
+    pub fn bell(&mut self) {
+        if self.info.record.provider == Provider::Codex
+            && !matches!(self.info.status, Status::Exited | Status::Attention)
+        {
+            self.before_attention = Some(self.info.status.clone());
+            self.info.status = Status::Attention;
+        }
+    }
+    pub fn expire_inferred(&mut self) {
+        self.decay_at = None;
+        if self.info.status == Status::ActiveInferred {
+            self.info.status = Status::Idle;
+        }
+        if self.before_attention == Some(Status::ActiveInferred) {
+            self.before_attention = Some(Status::Idle);
+        }
     }
     pub fn apply(&mut self, event: &HookEvent) {
         if self.info.status == Status::Exited {
+            return;
+        }
+        if self.info.record.provider == Provider::Codex {
+            if event.event == "agent-turn-complete"
+                && event.session_id.as_ref().is_some_and(|id| {
+                    self.codex_title_prefix
+                        .as_ref()
+                        .is_some_and(|prefix| id.starts_with(prefix))
+                })
+                && !matches!(&self.request, Request::Fork { parent_session_id, .. } if event.session_id.as_ref() == Some(parent_session_id))
+            {
+                if let Some(id) = &event.session_id {
+                    self.info.record.session_id = Some(id.clone());
+                }
+                self.info.status = Status::Idle;
+                self.decay_at = None;
+                self.before_attention = None;
+            }
             return;
         }
         match event.event.as_str() {
@@ -219,18 +319,7 @@ pub const EVENTS: &[&str] = &[
 ];
 impl AgentProvider for ClaudeProvider {
     fn check_installed(&self, environment: &ShellEnvironment) -> Result<PathBuf, String> {
-        environment
-            .variables
-            .get("PATH")
-            .into_iter()
-            .flat_map(std::env::split_paths)
-            .map(|dir| dir.join("claude"))
-            .find(|path| {
-                use std::os::unix::fs::PermissionsExt;
-                path.metadata()
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            })
-            .ok_or_else(|| "Claude Code is not installed on the resolved shell PATH".into())
+        installed("claude", environment)
     }
     fn build_launch(&self, c: &Context<'_>, env: &ShellEnvironment) -> Result<SpawnSpec, String> {
         let profile = c.record.role.profile();
@@ -279,19 +368,8 @@ impl AgentProvider for ClaudeProvider {
         if let Request::Fork { question, .. } = c.request {
             args.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: {question}"));
         }
-        let mut variables = env.variables.clone();
-        for (key, value) in [
-            ("DEVDESK_AGENT_ID", c.record.id.clone()),
-            ("DEVDESK_LAUNCH_ID", c.launch.to_string()),
-            ("DEVDESK_HOOK_TOKEN", c.token.into()),
-            (
-                "DEVDESK_HOOK_SOCKET",
-                c.socket.to_string_lossy().into_owned(),
-            ),
-            ("CLAUDE_CODE_NONBLOCKING_STDOUT", "1".into()),
-        ] {
-            variables.insert(key.into(), value);
-        }
+        let mut variables = hook_environment(c, env);
+        variables.insert("CLAUDE_CODE_NONBLOCKING_STDOUT".into(), "1".into());
         Ok(SpawnSpec {
             program: self.check_installed(env)?.to_string_lossy().into_owned(),
             args,
@@ -301,9 +379,45 @@ impl AgentProvider for ClaudeProvider {
         })
     }
 }
+pub(crate) fn installed(name: &str, environment: &ShellEnvironment) -> Result<PathBuf, String> {
+    environment
+        .variables
+        .get("PATH")
+        .into_iter()
+        .flat_map(std::env::split_paths)
+        .map(|dir| dir.join(name))
+        .find(|path| {
+            use std::os::unix::fs::PermissionsExt;
+            path.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+        .ok_or_else(|| format!("{name} is not installed on the resolved shell PATH"))
+}
+pub(crate) fn hook_environment(
+    c: &Context<'_>,
+    environment: &ShellEnvironment,
+) -> std::collections::HashMap<String, String> {
+    let mut variables = environment.variables.clone();
+    for (key, value) in [
+        ("DEVDESK_AGENT_ID", c.record.id.clone()),
+        ("DEVDESK_LAUNCH_ID", c.launch.to_string()),
+        ("DEVDESK_HOOK_TOKEN", c.token.into()),
+        (
+            "DEVDESK_HOOK_SOCKET",
+            c.socket.to_string_lossy().into_owned(),
+        ),
+    ] {
+        variables.insert(key.into(), value);
+    }
+    variables
+}
 /// Check on a spawn worker, with a hard deadline. Untested versions warn;
 /// they do not block the owner's CLI (I-6). No auth/settings output is logged.
-pub fn version_warning(program: &str, environment: &ShellEnvironment) -> Option<String> {
+pub fn version_warning(
+    provider: Provider,
+    program: &str,
+    environment: &ShellEnvironment,
+) -> Option<String> {
     use std::{
         io::Read,
         os::fd::AsRawFd,
@@ -349,12 +463,21 @@ pub fn version_warning(program: &str, environment: &ShellEnvironment) -> Option<
         Ok(version.trim().to_string())
     })();
     match result {
-        Ok(version) if version.split_whitespace().next() == Some("2.1.295") => None,
+        Ok(version)
+            if match provider {
+                Provider::Claude => version.split_whitespace().next() == Some("2.1.295"),
+                Provider::Codex => version.trim() == "codex-cli 0.162.0",
+            } =>
+        {
+            None
+        }
         Ok(version) => Some(format!(
-            "Untested Claude version {version}; run scripts/cli-probe.sh"
+            "Untested {} version {version}; run the CLI contract probes",
+            provider.label()
         )),
         Err(error) => Some(format!(
-            "Cannot verify Claude version: {error}; run scripts/cli-probe.sh"
+            "Cannot verify {} version: {error}; run the CLI contract probes",
+            provider.label()
         )),
     }
 }
@@ -372,6 +495,7 @@ mod tests {
             name: "Claude notes".into(),
             cwd: PathBuf::from("/tmp/stored-project"),
             role: Role::Primary,
+            provider: crate::agent::Provider::Claude,
             parent: None,
             snapshot_at: None,
             session_id: Some("20000000-0000-4000-8000-000000000002".into()),
@@ -540,11 +664,63 @@ mod tests {
         );
         // M4 records remain readable without a schema migration.
         let mut old = serde_json::to_value(record).unwrap();
+        old.as_object_mut().unwrap().remove("provider");
         old.as_object_mut().unwrap().remove("parent");
         old.as_object_mut().unwrap().remove("snapshot_at");
         let old: Record = serde_json::from_value(old).unwrap();
         assert!(old.parent.is_none() && old.snapshot_at.is_none());
+        assert_eq!(old.provider, Provider::Claude);
         std::fs::remove_dir_all(folder).unwrap();
+    }
+    #[test]
+    fn codex_inference_menus_cancel_failed_turn_bell_and_decay() {
+        use std::time::Duration;
+        let mut record = record();
+        record.provider = Provider::Codex;
+        let mut runtime = Runtime::new(record, Request::New);
+        runtime.info.status = Status::Idle;
+        // Enter can open a menu: activity is explicitly inferred, never Working.
+        runtime.input(true, Duration::ZERO);
+        assert_eq!(runtime.info.status, Status::ActiveInferred);
+        assert_eq!(runtime.decay_at, Some(Duration::from_secs(600)));
+        // Esc/cancel cannot prove completion. No-output expiry handles it.
+        runtime.input(false, Duration::from_secs(1));
+        assert_eq!(runtime.info.status, Status::ActiveInferred);
+        runtime.expire_inferred();
+        assert_eq!(runtime.info.status, Status::Idle);
+        // Any command's BEL is Attention, never proof of an approval prompt.
+        runtime.input(true, Duration::from_secs(10));
+        runtime.bell();
+        runtime.bell();
+        assert_eq!(runtime.info.status, Status::Attention);
+        runtime.input(false, Duration::from_secs(11));
+        assert_eq!(runtime.info.status, Status::ActiveInferred);
+        runtime.bell();
+        runtime.expire_inferred();
+        assert_eq!(runtime.info.status, Status::Attention);
+        runtime.input(false, Duration::from_secs(611));
+        assert_eq!(runtime.info.status, Status::Idle);
+        // A failed turn without notify stays inferred until decay or PTY exit.
+        runtime.input(true, Duration::from_secs(612));
+        runtime.apply(&event("StopFailure", None));
+        assert_eq!(runtime.info.status, Status::ActiveInferred);
+        runtime.observe_title("20000000-0000-4000-8000-0000000...");
+        runtime.apply(&HookEvent {
+            session_id: Some("30000000-0000-4000-8000-000000000003".into()),
+            ..event("agent-turn-complete", None)
+        });
+        assert_eq!(runtime.info.status, Status::ActiveInferred);
+        runtime.apply(&HookEvent {
+            session_id: Some("20000000-0000-4000-8000-000000000002".into()),
+            ..event("agent-turn-complete", None)
+        });
+        assert_eq!(runtime.info.status, Status::Idle);
+        assert!(runtime.decay_at.is_none());
+        runtime.exited();
+        runtime.bell();
+        runtime.input(true, Duration::from_secs(613));
+        runtime.apply(&event("agent-turn-complete", None));
+        assert_eq!(runtime.info.status, Status::Exited);
     }
     #[test]
     fn failures_denials_parallel_tools_and_blocked_stop_are_best_effort() {

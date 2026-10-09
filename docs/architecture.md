@@ -438,7 +438,7 @@ Project identity is the config `id` slug. Renaming a project's `name` is free; c
 | **Hook helper** | The helper is the DevDesk binary itself (`DevDesk hook --kind claude`). Its absolute path is baked into the injected settings, so there's no PATH lookup. It reads stdin and writes to the socket. It never executes anything from the payload. |
 | **Agent permissions** | Primary agents run with the **user's own** CLI permission settings. DevDesk adds nothing and removes nothing. Side conversations are read-only by CLI-level tool removal / OS sandbox (see agent-integration.md). |
 | **Credentials** | DevDesk stores **no secrets** in the MVP. Agent CLIs keep their own auth (Keychain or their own files). Projects use their own `.env`. Environment overrides in `config.toml` are for non-secrets. A future `{ keychain = "…" }` env value reads from macOS Keychain at spawn time. |
-| **Environment leakage** | DevDesk's own environment isn't special. Children get the login-shell env plus explicit overrides. `DEVDESK_*` vars carry IDs only, never secrets. |
+| **Environment leakage** | DevDesk's own environment isn't special. Children get the login-shell env plus explicit overrides. `DEVDESK_*` vars carry launch identities, an attribution token and Primary Codex notification argv. Environment values are never logged or persisted by DevDesk. |
 | **Terminal escape abuse** | OSC 52 clipboard *read* (`ClipboardLoad`) is **denied**. Clipboard *write* is allowed only from the **focused** pane, capped at 100 KB, with a toast ("Clipboard set by Horizon"). Writes from background panes are dropped, so arbitrary output can't silently replace what you're about to paste. Titles are sanitised before display. |
 | **Hyperlinks** | OSC 8 links open only on Cmd-click and only for `http(s)://` and `file://`. |
 | **Process isolation** | Not a goal: child processes run as the user, just as in Terminal.app. Isolation applies only to side conversations. |
@@ -576,3 +576,17 @@ launch. Side records are excluded from automatic restore. UI holds only mirrors,
 sends layout changes, and restores tab order through stable identities rather than
 new session IDs. Shell cwd reads use macOS SDK identity guards. See [M4 review](m4-review.md)
 for tests, best-effort status limits and pending owner acceptance.
+
+M6 implementation evidence (🧪): providers persist an explicit Claude/Codex enum
+with a default for old records. Codex retains inferred status, using a single
+no-output deadline rather than idle polling. Only Codex output activity records
+an atomic timestamp on real output; view invalidation does not renew it. Public
+OSC title metadata correlates notify with the visible thread, filtering internal
+housekeeping notifications without reading conversations. Read-only launch fails
+closed on unreadable config or unaddressable MCP keys, disables additional action
+features, and omits user callbacks. Before Codex Stop, the actor journals live
+descendant SIDs by kernel ancestry/birth identity and retains them through
+reparenting; completion waits for every tracked session. Surviving Codex orphans
+are expanded before termination. SDK operations remain off GPUI, and no PTY
+bytes/wakeups enter the actor. See [M6 review](m6-review.md) for tests and crash
+limitations; M7 remains the final hardening pass.

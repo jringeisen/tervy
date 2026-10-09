@@ -232,6 +232,7 @@ mod persistence_tests {
             name: "Agent".into(),
             cwd: PathBuf::from("/tmp/record-cwd"),
             role: crate::agent::Role::Side,
+            provider: crate::agent::Provider::Claude,
             parent: None,
             snapshot_at: None,
             session_id: Some(uuid::Uuid::new_v4().to_string()),

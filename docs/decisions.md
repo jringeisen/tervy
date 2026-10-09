@@ -108,7 +108,7 @@ Estimate: a daemon is an L-sized project, not a transport swap. No change now (i
 - Process exit is authoritative for both.
 - The user's settings files are never modified.
 
-**Consequences:** Codex status is heuristic. Upgrade path: a DevDesk-owned Codex app-server.
+**Consequences:** Codex status is heuristic. Upgrade path: a DevDesk-owned Codex app-server. 🧪 M6 (0.162.0): internal title-generation turns also notify. Correlate notify IDs with the configured public terminal-title UUID prefix; retain explicit inferred/Attention labels. `--remote` and `--no-daemon` are incompatible, so the spike retains the accepted default.
 
 ### ADR-010: Persistence: TOML + SQLite
 **Decision:** User-authored `config.toml` (projects, processes, settings), hot-reloaded. DevDesk appends projects via `toml_edit`. Owner-authorized M4 extension: sidebar Remove controls also delete project/process definitions with confirmation, preserving unrelated comments and project files. `state.db` (rusqlite, bundled, WAL) holds agent records, UI layout and the session ledger, and is written only by the supervisor thread.
@@ -156,6 +156,8 @@ Estimate: a daemon is an L-sized project, not a transport swap. No change now (i
 ### ADR-022: Codex always `--no-daemon`
 **Context:** Codex's TUI attaches to a shared daemon by default; killing the TUI leaves the turn running. `-s` / `-a` don't force embedded mode.
 **Decision:** Every Codex argv DevDesk builds (new, resume, fork) includes `--no-daemon`. DevDesk never stops the user's Codex daemon.
+
+**M6 evidence / consequence:** 🧪 In 0.162.0, command workers create additional SIDs and survive an original-SID-only stop. Before Stop, capture and journal live descendant sessions by kernel ancestry and birth identity, then sweep them too. Recover a surviving Codex TUI's descendants before terminating it. No process-name matching or global daemon stop. This strengthens lifecycle enforcement without removing `--no-daemon`.
 
 ### ADR-023: Reject Codex hook-trust bypass
 **Context:** Hooks injected via `-c` are untrusted and skipped. `--dangerously-bypass-hook-trust` runs **all** non-managed hooks, including untrusted repo hooks.

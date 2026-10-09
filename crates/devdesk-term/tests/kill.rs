@@ -85,3 +85,50 @@ fn sweep_finds_survivor_after_its_leader_has_exited() {
     session.signal(libc::SIGKILL).unwrap();
     wait_empty(session.owned);
 }
+
+#[test]
+fn explicitly_tracked_descendant_sessions_survive_reparenting_and_exclude_siblings() {
+    let mut session = spawn("/usr/bin/python3", vec!["-u".into(), "-c".into(), "import os,signal,time\npid=os.fork()\nif pid==0:\n os.setsid()\n signal.signal(signal.SIGTERM,signal.SIG_IGN)\n print('DETACHED_READY',flush=True)\n time.sleep(1000)\nelse: time.sleep(1000)".into()]);
+    let unrelated = spawn("/bin/sleep", vec!["1000".into()]);
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let detached = loop {
+        let sessions = session.owned.descendant_sessions().unwrap();
+        let ready = session
+            .handle
+            .snapshot(&devdesk_term::snapshot::Palette::default())
+            .runs
+            .iter()
+            .any(|run| run.text.contains("DETACHED_READY"));
+        if ready && sessions.len() == 1 {
+            break sessions;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "detached descendant did not start"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    assert_ne!(detached[0].leader, unrelated.owned.leader);
+    let wrong = OwnedSession {
+        leader: ProcessIdentity {
+            started_us: session.owned.leader.started_us + 1,
+            ..session.owned.leader
+        },
+    };
+    assert!(wrong.descendant_sessions().is_err());
+    session.track_sessions(detached.clone());
+    assert_eq!(session.owned_sessions().len(), 2);
+    session.signal(libc::SIGTERM).unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        !session.sessions_empty().unwrap(),
+        "child should ignore TERM after reparenting"
+    );
+    session.signal(libc::SIGKILL).unwrap();
+    wait_empty(session.owned);
+    wait_empty(detached[0]);
+    assert!(session.sessions_empty().unwrap());
+    assert!(!unrelated.owned.members().unwrap().is_empty());
+    unrelated.signal(libc::SIGKILL).unwrap();
+    wait_empty(unrelated.owned);
+}

@@ -26,6 +26,7 @@ pub struct TerminalSession {
     pub handle: TerminalHandle,
     pub pid: u32,
     pub owned: crate::kill::OwnedSession,
+    extra_sessions: Vec<crate::kill::OwnedSession>,
     master: Option<std::fs::File>,
     reader: Option<
         JoinHandle<(
@@ -114,6 +115,7 @@ impl TerminalSession {
                 handle,
                 pid,
                 owned,
+                extra_sessions: vec![],
                 master: Some(master),
                 reader: Some(reader),
             },
@@ -121,12 +123,40 @@ impl TerminalSession {
         ))
     }
 
+    /// Core registers these discovered sessions in its ledger before stopping
+    /// them. Their identities survive reparenting after the original TUI exits.
+    pub fn track_sessions(&mut self, sessions: Vec<crate::kill::OwnedSession>) {
+        for session in sessions {
+            if session.leader != self.owned.leader
+                && !self
+                    .extra_sessions
+                    .iter()
+                    .any(|old| old.leader == session.leader)
+            {
+                self.extra_sessions.push(session);
+            }
+        }
+    }
+    pub fn owned_sessions(&self) -> Vec<crate::kill::OwnedSession> {
+        let mut sessions = vec![self.owned];
+        sessions.extend(&self.extra_sessions);
+        sessions
+    }
+    pub fn sessions_empty(&self) -> io::Result<bool> {
+        for session in self.owned_sessions() {
+            if !session.members()?.is_empty() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
     pub fn signal(&self, signal: i32) -> io::Result<()> {
         if let Some(master) = &self.master {
-            self.owned.signal(signal, master)
-        } else {
-            Ok(())
+            for session in self.owned_sessions() {
+                session.signal(signal, master)?;
+            }
         }
+        Ok(())
     }
 
     pub fn foreground_job(&self) -> Option<String> {
@@ -153,7 +183,7 @@ impl Drop for TerminalSession {
         // Transfer the open master and join handle to a worker. No process
         // queries, signal syscalls or waits run in a GPUI entity's destructor.
         let master = self.master.take();
-        let owned = self.owned;
+        let owned = self.owned_sessions();
         let handle = self.handle.clone();
         if let Some(reader) = self.reader.take() {
             let _ = std::thread::Builder::new()
@@ -164,8 +194,10 @@ impl Drop for TerminalSession {
                     // delivery failure, deadline, headless caller) still sweep
                     // the verified session before closing its master.
                     if let Some(master) = &master {
-                        let _ = owned.signal(libc::SIGHUP, master);
-                        let _ = owned.signal(libc::SIGKILL, master);
+                        for session in &owned {
+                            let _ = session.signal(libc::SIGHUP, master);
+                            let _ = session.signal(libc::SIGKILL, master);
+                        }
                     }
                     let _ = handle.input.send(Msg::Shutdown);
                     let _ = reader.join();

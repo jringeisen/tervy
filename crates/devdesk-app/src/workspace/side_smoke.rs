@@ -5,6 +5,11 @@ impl Workspace {
     /// Opt-in native render probe: synthetic mirrors only, no CLI or project
     /// process is launched. The real actor lifecycle is covered separately.
     pub(super) fn smoke_side(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let provider = if std::env::var("DEVDESK_PERF_PROVIDER").as_deref() == Ok("codex") {
+            agent::Provider::Codex
+        } else {
+            agent::Provider::Claude
+        };
         let parent = SessionId(10_001);
         let side = SessionId(10_002);
         let primary = agent::Record {
@@ -13,6 +18,7 @@ impl Workspace {
             name: "Synthetic parent".into(),
             cwd: std::env::temp_dir(),
             role: agent::Role::Primary,
+            provider,
             session_id: Some("20000000-0000-4000-8000-000000000002".into()),
             parent: None,
             snapshot_at: None,
@@ -25,6 +31,7 @@ impl Workspace {
                     id: "30000000-0000-4000-8000-000000000003".into(),
                     name: "Why this choice?".into(),
                     role: agent::Role::Side,
+                    provider,
                     parent: Some(primary.id.clone()),
                     snapshot_at: Some(1_791_518_400),
                     ..primary

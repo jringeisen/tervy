@@ -37,7 +37,8 @@ impl HookEvent {
         uuid::Uuid::parse_str(&self.agent_id).is_ok()
             && self.launch > 0
             && self.token.len() == 36
-            && crate::agent::EVENTS.contains(&self.event.as_str())
+            && (crate::agent::EVENTS.contains(&self.event.as_str())
+                || self.event == "agent-turn-complete")
             && self
                 .session_id
                 .as_ref()

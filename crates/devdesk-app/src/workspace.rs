@@ -65,7 +65,7 @@ enum PaletteAction {
     StartAll(String),
     StopAll(String),
     Recover,
-    LaunchClaude(bool),
+    LaunchAgent(agent::Provider, bool),
     ResumeAgent(SessionId),
     Ask,
 }
@@ -348,6 +348,7 @@ impl Workspace {
             CoreEvent::SessionChanged(info) => {
                 if let Some(tab) = self.tabs.get_mut(&info.id) {
                     tab.view.update(cx, |view, cx| {
+                        view.set_agent(info.agent.as_ref(), info.launch);
                         view.set_status(&info.status, cx);
                         if info.agent.is_some()
                             && matches!(
@@ -371,6 +372,7 @@ impl Workspace {
                         )
                     });
                     view.update(cx, |view, cx| {
+                        view.set_agent(info.agent.as_ref(), info.launch);
                         view.set_status(&info.status, cx);
                         if info.agent.is_some()
                             && matches!(
@@ -423,8 +425,10 @@ impl Workspace {
                 }
                 if let Some(tab) = self.tabs.get_mut(&info.id) {
                     tab.view.update(cx, |view, cx| {
+                        view.set_agent(info.agent.as_ref(), info.launch);
                         view.attach(handle, events, warning, spawn_started, cx);
                         {
+                            view.set_agent(info.agent.as_ref(), info.launch);
                             view.set_status(&info.status, cx);
                             if info.agent.is_some()
                                 && matches!(
@@ -501,11 +505,12 @@ impl Workspace {
                 matches!(
                     tab.info.status,
                     SessionStatus::Starting | SessionStatus::Running
-                ) && tab
-                    .info
-                    .agent
-                    .as_ref()
-                    .is_some_and(|info| info.status == agent::Status::NeedsApproval)
+                ) && tab.info.agent.as_ref().is_some_and(|info| {
+                    matches!(
+                        info.status,
+                        agent::Status::NeedsApproval | agent::Status::Attention
+                    )
+                })
             })
             .count();
         if approvals != self.approvals {
@@ -541,7 +546,7 @@ impl Workspace {
                 (
                     tab.info.name.clone(),
                     if tab.info.agent.is_some() {
-                        "Stop this agent and remove its DevDesk entry. Claude's own saved conversation is kept."
+                        "Stop this agent and remove its DevDesk entry. The CLI's saved conversation is kept."
                     } else {
                         "Stop this process and remove its definition from DevDesk's global config."
                     },
@@ -607,6 +612,8 @@ impl Workspace {
                     agent::Status::Working => "Working",
                     agent::Status::NeedsApproval => "Needs approval",
                     agent::Status::TurnFailed => "Turn failed",
+                    agent::Status::Attention => "Attention",
+                    agent::Status::ActiveInferred => "Active (inferred)",
                     agent::Status::Exited => "Resume",
                 }
             };
@@ -629,10 +636,11 @@ impl Workspace {
                                 div()
                                     .text_color(match agent.status {
                                         agent::Status::NeedsApproval
-                                        | agent::Status::TurnFailed => theme.warning,
-                                        agent::Status::Working | agent::Status::Launching => {
-                                            theme.primary
-                                        }
+                                        | agent::Status::TurnFailed
+                                        | agent::Status::Attention => theme.warning,
+                                        agent::Status::Working
+                                        | agent::Status::Launching
+                                        | agent::Status::ActiveInferred => theme.primary,
                                         _ => theme.muted_foreground,
                                     })
                                     .child("●"),
@@ -677,24 +685,31 @@ impl Workspace {
                     ),
             );
         }
-        let project = project.to_string();
-        rows.child(
-            div()
-                .id(SharedString::from(format!("launch-claude-{project}")))
-                .pl_3()
-                .py_1()
-                .text_sm()
-                .cursor_pointer()
-                .child("+ Launch Claude")
-                .on_click(cx.listener(move |this, _, _, _| {
-                    this.core.send(CoreCommand::NewAgent {
-                        project: project.clone(),
-                        picker: false,
-                    })
-                })),
-        )
-        .into_any_element()
+        for provider in [agent::Provider::Claude, agent::Provider::Codex] {
+            let project = project.to_string();
+            rows = rows.child(
+                div()
+                    .id(SharedString::from(format!(
+                        "launch-{}-{project}",
+                        provider.label()
+                    )))
+                    .pl_3()
+                    .py_1()
+                    .text_sm()
+                    .cursor_pointer()
+                    .child(format!("+ Launch {}", provider.label()))
+                    .on_click(cx.listener(move |this, _, _, _| {
+                        this.core.send(CoreCommand::NewAgent {
+                            project: project.clone(),
+                            picker: false,
+                            provider,
+                        })
+                    })),
+            );
+        }
+        rows.into_any_element()
     }
+
     fn tab_key(tab: &ShellTab) -> String {
         if let Some(agent) = &tab.info.agent {
             format!("agent:{}", agent.record.id)
@@ -1203,10 +1218,21 @@ impl Workspace {
             )
         }));
         if let Some(project) = &self.active_project {
-            actions.push(("Launch Claude".into(), PaletteAction::LaunchClaude(false)));
+            actions.push((
+                "Launch Claude".into(),
+                PaletteAction::LaunchAgent(agent::Provider::Claude, false),
+            ));
             actions.push((
                 "Resume other Claude session…".into(),
-                PaletteAction::LaunchClaude(true),
+                PaletteAction::LaunchAgent(agent::Provider::Claude, true),
+            ));
+            actions.push((
+                "Launch Codex".into(),
+                PaletteAction::LaunchAgent(agent::Provider::Codex, false),
+            ));
+            actions.push((
+                "Resume other Codex session…".into(),
+                PaletteAction::LaunchAgent(agent::Provider::Codex, true),
             ));
             for (id, tab) in &self.tabs {
                 if tab.info.project == *project && tab.info.agent.is_some() {
@@ -1265,11 +1291,12 @@ impl Workspace {
             PaletteAction::StartAll(project) => self.core.send(CoreCommand::StartAll(project)),
             PaletteAction::StopAll(project) => self.core.send(CoreCommand::StopAll(project)),
             PaletteAction::Recover => self.core.send(CoreCommand::ShowOrphans),
-            PaletteAction::LaunchClaude(picker) => {
+            PaletteAction::LaunchAgent(provider, picker) => {
                 if let Some(project) = &self.active_project {
                     self.core.send(CoreCommand::NewAgent {
                         project: project.clone(),
                         picker,
+                        provider,
                     });
                 }
             }

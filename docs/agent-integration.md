@@ -208,6 +208,7 @@ Common flags (`CODEX_COMMON`):
 -c tui.notifications=["approval-requested"]
 -c tui.notification_method="bel"
 -c tui.notification_condition="always"
+-c tui.terminal_title=["session-id"]
 ```
 
 | Request | argv (abbreviated) |
@@ -218,7 +219,7 @@ Common flags (`CODEX_COMMON`):
 | Fork (side) | see §5.4 |
 
 Notes:
-- `notify` replaces any `notify` the user configured in `~/.codex/config.toml`. DevDesk reads that documented config key and, if set, the helper **chains** to the user's original notify command after reporting, passing the **unchanged** JSON as the last argv argument, exactly as Codex would. ❓ Verify in M6.
+- `notify` replaces any `notify` the user configured in `~/.codex/config.toml`. DevDesk reads that documented config key and, if set, the helper **chains** to the user's original notify command after reporting, passing the **unchanged** JSON as the last argv argument, exactly as Codex would. 🧪 M6 verifies this for Primary. Side does not chain user callbacks, which can write outside the model sandbox.
 - These `-c` overrides also force embedded mode ✅, which makes `--no-daemon` belt-and-braces.
 
 ### 4.3 Status
@@ -227,7 +228,7 @@ Codex hooks exist ✅, but hooks injected via `-c` are **untrusted and skipped**
 
 | Signal | Source | → AgentUpdate |
 |---|---|---|
-| `notify` payload, `type: agent-turn-complete` ✅ | helper → socket | `SessionId(thread-id)` (first time) + `Idle` |
+| `notify` payload, `type: agent-turn-complete` ✅ | helper → socket | Matching visible-thread ID + `Idle` |
 | `Event::Bell` in the Codex pane | `tui.notifications=["approval-requested"]` with `method="bel"` ✅ | `Attention` (cleared by any input) |
 | Enter pressed in the pane | DevDesk is the terminal | `ActiveInferred` (cleared by notify, or 10 min without PTY output) |
 | PTY child exit | supervisor | `Exited(code)` |
@@ -239,12 +240,15 @@ Fidelity is **meaningfully lower** than Claude's, and the UI must say so rather 
 
 So Codex agents show **"Attention"** (BEL seen; cleared by any input in the pane) and **"Active (inferred)"** (input submitted; cleared by `notify` or after 10 minutes of no PTY output). They do not show Claude's precise Working/NeedsApproval.
 
-Test before M6 sign-off: menus, Esc-cancel, a failed turn, and a command that prints BEL. **M6 includes a ½-day spike on the app-server path** (§6.6); if it's clean, it replaces these heuristics. ❓ A6.
+🧪 M6 scenario tests cover menus, Esc-cancel, failed turns and arbitrary BEL. The app-server spike rejects the route: 0.162.0 refuses `--remote` combined with `--no-daemon`, so ADR-022 retains these heuristics.
+
+🧪 Internal title-generation turns also emit notify, with unrelated IDs. Request the documented `tui.terminal_title=["session-id"]`; accept only full notify IDs matching its validated public OSC-title UUID prefix. In 0.162.0 this title truncates to 29 characters plus dots. Core never reconstructs a full ID from that prefix. Source: [exact-version title implementation](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/tui/src/chatwidget/status_surfaces.rs). Title customization during a session can reduce status fidelity; unmatched signals are ignored.
 
 ### 4.4 Sessions
 
-- **Identity:** no `--session-id` flag 📘. The thread ID arrives with the **first `notify`** (end of the first turn). Fallback: the exit summary (`codex resume <id>`) parsed from the pane on exit ✅. Before either arrives, the record has no provider ID: "Ask Question" is disabled and "Resume" uses the picker.
-- **Discovery, persistence, stop:** same pattern as Claude. Stop sends SIGTERM to the process group, then SIGKILL. ❓ The Codex TUI may not handle SIGTERM gracefully; at worst the in-flight turn is lost. The conversation up to its last persisted item remains resumable.
+- **Identity:** no `--session-id` flag 📘. The thread ID arrives with the **first notify matching the visible terminal-title UUID prefix** (end of the first main turn, 🧪 M6). Fallback: the exit summary (`codex resume <id>`) parsed from the pane on exit ✅. Before either arrives, the record has no provider ID: "Ask Question" is disabled and "Resume" uses the picker.
+- **Discovery and persistence:** CLI-owned, with explicit Resume. 🧪 M6 verifies same-fork Resume.
+- **Stop:** 🧪 Original-SID-only signals leave ordinary Codex command workers alive: they create separate SIDs. Core captures live descendant sessions through kernel ancestry before TERM, journals their birth identities, then waits for all sessions to empty (KILL after three seconds). Recovery also discovers descendants of a surviving Codex TUI before terminating it. No shared daemon stop. Already-reparented or deliberately escaped jobs cannot be recovered from ancestry; M7 hardens crash coverage.
 
 ### 4.5 Terminal compatibility requirements (both CLIs)
 
@@ -314,9 +318,12 @@ claude --resume <parent-session-id> --fork-session
 
 ```
 codex fork <parent-thread-id> --no-daemon -s read-only -a never
-      -c mcp_servers.<name>.enabled=false        # one per server in the user's ~/.codex/config.toml
+      -c mcp_servers.<name>.enabled=false        # every server from the effective file layers
       --disable plugins --disable apps --disable computer_use --disable browser_use
       --disable browser_use_external --disable in_app_browser --disable image_generation
+      --disable hooks --disable skill_mcp_dependency_install --disable tool_suggest
+      --disable worktrees --disable workspace_dependencies -c agents.enabled=false
+      -c tui.terminal_title=["session-id"]
       -c notify=[…] -c tui.notifications=["approval-requested"] -c tui.notification_method="bel" -c tui.notification_condition="always"
       "<OBSERVER PREAMBLE + user's question>"
 ```
@@ -324,11 +331,12 @@ codex fork <parent-thread-id> --no-daemon -s read-only -a never
 - **`-s` sandboxes only model-generated shell commands** 📘. MCP servers and plugins are separate processes and integrations **outside** that sandbox.
   - 🧪 (test C1): this user's config enables `node_repl` (runs JavaScript), `computer-use`, `solo`, `youtrack`, `vault_mcp` and several plugins. In a fork with only `sandbox_mode="read-only"`, `mcp__node_repl__js` was **available**. The model declined to use it, but that is prompt behaviour, not enforcement.
   - 🧪 (test C2): with every configured server disabled via `-c mcp_servers.<name>.enabled=false` plus the `--disable` features above, the fork's tool registry showed **no `mcp__*` tools**.
-  - DevDesk enumerates server names from the user's `~/.codex/config.toml` (and the project's `.codex/config.toml`) at launch time. If the config can't be parsed, the side conversation **refuses to start**: fail closed.
-- Remaining tools after C2: `exec_command`/`write_stdin` (sandboxed shell), `apply_patch` (🧪 C3: **rejected** under read-only + `approval_policy="never"`: `patch rejected: writing is blocked by read-only sandbox`), `web__run` (web search, read-only), `collaboration.*` (subagent tools; with `--no-daemon` the fork is a separate process and can't reach the parent's threads ❓, test in M6), `view_image`, goals.
+  - 🧪 DevDesk enumerates user/CODEX_HOME config, selected profile, `/etc/codex/config.toml` when present, and project ancestor layers to the Git root. Read/parse failures, oversized inputs and names that cannot safely be addressed by CLI overrides refuse Side launch. 0.162.0 treats quotes in dotted key paths literally; unquoted ordinary server names are used. This machine has `herd` and `laravel-boost`; tests substitute local synthetic servers.
+- Remaining tools after C2: `exec_command`/`write_stdin` (sandboxed shell), `apply_patch` (🧪 C3: **rejected** under read-only + `approval_policy="never"`: `patch rejected: writing is blocked by read-only sandbox`), `web__run` (web search, read-only), `collaboration.*` (historical C2 result; M6 disables these with `agents.enabled=false`, and the model reports none available), `view_image`, goals.
 - `-s read-only` → macOS Seatbelt. Shell writes fail at the OS level 🧪 (`touch: Operation not permitted`). Network is off for shell commands ✅.
 - `-a never` → no approval prompts; failures go back to the model 📘.
-- `--no-daemon` → the fork lives in DevDesk's PTY, so closing the pane really stops it. Without it, `-s`/`-a` do not force embedded mode ✅, and the fork would join the shared daemon.
+- 🧪 M6 also disables built-in worktree tools, which appeared as `mcp__codex_worktrees__` despite external-server/plugin disabling. Hooks and workspace dependencies are disabled; Side never chains the user's original notify callback.
+- `--no-daemon` → the fork lives in DevDesk's PTY; the descendant-session sweep also stops its tool jobs. Without it, `-s`/`-a` do not force embedded mode ✅, and the fork would join the shared daemon.
 - **Asymmetry (accepted):** Codex's read-only sandbox still allows *reading* shell commands (`git diff`, `git log`) 🧪. Claude's side conversation has no shell. Making Claude Bash read-only needs sandbox + allowlist work that isn't verified (see open-questions).
 
 ### 5.5 The observer preamble (accuracy, not security)

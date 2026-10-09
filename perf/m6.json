@@ -1,0 +1,44 @@
+{
+  "recorded": "2026-10-09",
+  "milestone": "M6",
+  "machine": "Mac14,6 / Apple M2 Max / 96 GB / macOS 27.0.1 26A434",
+  "evidence": "🧪 local release and interactive PTY probes",
+  "startup_first_frame_ms": {
+    "layout": "terminal",
+    "runs": 10,
+    "samples": [
+      681.1,
+      176.0,
+      167.8,
+      176.2,
+      168.6,
+      165.4,
+      168.4,
+      164.5,
+      161.3,
+      162.9
+    ],
+    "p50": 168.10000000000002,
+    "p95": 681.1,
+    "budget_p50_ms": 500,
+    "m2_p50_ms": 164.35,
+    "note": "Median passes; first post-build launch exceeds 500 ms. No OS/Metal cache flush."
+  },
+  "codex_interactive": {
+    "cli": "0.162.0",
+    "trials": 5,
+    "correct_context_answers": 5,
+    "elapsed_s": 163.27,
+    "shell_write_blocked": true,
+    "patch_write_blocked": true,
+    "mcp_startup_in_side": false,
+    "collaboration": "model reports absent; agents.enabled=false",
+    "side_resume_same_id": true,
+    "parent_completed": true,
+    "stop_marker_absent_after_s": 22,
+    "owned_sessions_empty": true,
+    "fixture_only": true
+  },
+  "native_side_smoke": "PASS",
+  "check_tests": 65
+}

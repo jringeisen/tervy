@@ -25,6 +25,35 @@ struct Fields {
 
 pub fn run(kind: Option<&str>, last: Option<&str>) {
     let _ = report(kind, last);
+    if kind == Some("codex-notify")
+        && let Some(payload) = last
+    {
+        chain_notify(payload);
+    }
+}
+/// Preserve the original argv payload exactly. Spawn without waiting: the
+/// callback remains in the CLI's owned session, so Stop can still sweep it.
+fn chain_notify(payload: &str) {
+    let Ok(raw) = std::env::var("DEVDESK_CODEX_NOTIFY") else {
+        return;
+    };
+    if raw.len() > 65536 {
+        return;
+    }
+    let Ok(args) = serde_json::from_str::<Vec<String>>(&raw) else {
+        return;
+    };
+    let Some(program) = args.first().filter(|program| !program.is_empty()) else {
+        return;
+    };
+    let _ = std::process::Command::new(program)
+        .args(&args[1..])
+        .arg(payload)
+        .env_remove("DEVDESK_CODEX_NOTIFY")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 fn report(kind: Option<&str>, last: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let fields: Fields = match kind {

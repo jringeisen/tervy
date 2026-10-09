@@ -215,7 +215,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 ---
 
-## M6 — Codex provider (M)
+## M6 — Codex provider (M) — ✅ implemented and validated 2026-10-09
 
 **Delivers:** everything from M4–M5 for Codex. This validates the provider abstraction against a second real CLI.
 
@@ -235,6 +235,8 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 - The side conversation's `touch` fails with `Operation not permitted` in the pane.
 
 ---
+
+🧪 M6 review: [automated acceptance, CLI findings and limits](m6-review.md). Five interactive read-only forks, same-fork Resume, parent completion and actual workload Stop pass; 65 offline tests pass. Startup median passes; first/p95 remains over 500 ms. Owner-authorized autonomous commit; no absent-owner visual sign-off is claimed.
 
 ## M7 — Hardening and performance (M)
 

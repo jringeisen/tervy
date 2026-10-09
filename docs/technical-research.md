@@ -350,6 +350,14 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 - 🧪 `ShareOnboardingGuide` is explicitly disallowed and accepted in interactive argv. No account action was invoked. ❓ Independent enumeration of the interactive tool registry and third-party provider/model inheritance remain unverified; no model self-report is treated as security proof.
 - 🧪 Release startup p50 169.0 ms, first/p95 589.9 ms (10 runs, same `normal` benchmark layout as M4). Median changes +0.69%; first launch still misses 500 ms. No new idle or stress pass is claimed; M7 owns those gates.
 
+## 10i. M6 Codex integration (replacement machine, 2026-10-09)
+
+- 🧪 Codex 0.162.0: five interactive read-only forks through production supervisor/PTYs, same-fork Resume, inherited context, parent completion and real mid-turn Stop pass. Full Side flags block shell/patch writes; configured fixture servers never start in Side; model reports no MCP/collaboration tools. Details and independent-evidence limits: [M6 review](m6-review.md).
+- 🧪 `--remote` + `--no-daemon` is rejected. Internal title-generation notify IDs are unrelated to the visible thread; matching the configured public OSC-title UUID prefix avoids adopting them. No private conversation files are parsed.
+- 🧪 Quoted override keys create a different server. Safe ordinary names are unquoted; unusual names fail closed. This Mac config contains `herd` and `laravel-boost`; synthetic substitutes only were invoked. Built-in worktree tools require an additional disable; hooks, workspace dependencies and multi-agent tools are disabled too.
+- 🧪 Codex command workers create new SIDs, survive an original-session-only sweep, and remain direct descendants of its native CLI. TERM/KILL with captured and journaled descendant sessions passes the deterministic 20-second marker check. Legacy execution and native Ctrl-C alternatives failed and were removed. Detached jobs discovered before Stop retain identity after reparenting; unrelated sessions are protected by tests. ❓ Crash-time discovery gaps remain M7 hardening scope.
+- 🧪 65 offline tests and native Codex split smoke pass. First-frame p50 168.1 ms; first/p95 681.1 ms exceeds 500 ms. `perf/m6.json` records the samples; no true cold-cache claim.
+
 ## 11. Library compatibility and licensing
 
 - **Version coupling:** `gpui-component` pins `gpui-pre` exactly, and every GPUI-dependent crate must match that pin. Upgrades happen as one unit ("bump gpui-kit").
@@ -391,9 +399,9 @@ All the risks in one place. Details are in the sections referenced.
 | A1 | A CLT-only build works with `runtime_shaders` | Must install Xcode + MetalToolchain (~hours) | ✅ **Verified in M0**: builds and renders with Command Line Tools only (`gpui-kit` 0.7.1 enables `runtime_shaders` on `gpui-pre-platform`). No Xcode needed |
 | A2 | Runtime shader compilation stays within the cold-start budget | Need offline shaders, so Xcode is required | **Partly verified in M0:** original machine release p50 152 ms, first launch after rebuild ~1.1 s. 🧪 Replacement machine: p50 169.9 ms, first launch 473.2 ms included in the ten-run sample (§10b). M1 first-frame and content measurements are recorded separately in §10d / `perf/baseline-m1.json`; true cold-cache shader compile remains unverified |
 | A3 | Claude `--tools` / `--disallowedTools` / `--strict-mcp-config` enforce in **interactive** mode as they do in `-p` | Side conversations not read-only. Fall back to approach B (headless `-p`) | 🧪 M5 passes, Claude 2.1.295; §10h and m5-review.md |
-| A4 | `codex fork -s read-only` enforces the same in the interactive TUI with `--no-daemon` | Same | M6 |
+| A4 | `codex fork -s read-only` enforces the same in the interactive TUI with `--no-daemon` | Same | 🧪 M6 passes the full Side profile, Codex 0.162.0; §10i |
 | A5 | `--settings` hooks add to, rather than replace, the user's hooks | Could disable the user's own hooks | 🧪 M4: Claude 2.1.295, temporary user-level + injected Setup hooks both fired with the same ID using `--init-only`; real user settings unchanged (§10g) |
-| A6 | `codex -c notify=[…]` and `-c tui.*` work in the interactive TUI and force embedded mode | Status degrades to exited/running only | M6 |
+| A6 | `codex -c notify=[…]` and `-c tui.*` work in the interactive TUI and force embedded mode | Status degrades to exited/running only | 🧪 M6 passes overrides with visible-thread identity filtering; §10i |
 | A7 | Children spawned via alacritty `tty` start with default signal dispositions and mask | Children ignore SIGINT/SIGPIPE, so graceful stop fails | M1 |
 | A8 | One OS thread per PTY is acceptable at 20–40 terminals | Need a shared `polling`-based reader | M7 benchmark |
 | A9 | gpui-component's input, list, tabs and resizable cover the palette, tabs and split | More custom UI work | 🧪 M2 Input/Command/TabBar compile and run; subsequence fuzzy matching is custom. 🧪 M5 native render smoke verifies equal split geometry, side-only close, history reopen and question input (§10h). |
@@ -404,7 +412,7 @@ All the risks in one place. Details are in the sections referenced.
 
 ## Appendix A — Empirical verification log
 
-All runs were on 2026-10-08 on the original research machine, in a scratch directory containing `notes.txt` ("The secret project codename is BLUEHERON."). Times are local. They have not yet been repeated on the replacement machine.
+All runs were on 2026-10-08 on the original research machine, in a scratch directory containing `notes.txt` ("The secret project codename is BLUEHERON."). Times are local. Replacement-machine results are recorded separately in §10g–§10i; the original entries below remain historical.
 
 ### Claude Code 2.1.295
 

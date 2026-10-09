@@ -50,11 +50,31 @@ pub enum Command {
     NewAgent {
         project: String,
         picker: bool,
+        provider: agent::Provider,
     },
     ResumeAgent(SessionId),
     ForkAgent {
         parent: SessionId,
         question: String,
+    },
+    AgentInput {
+        id: SessionId,
+        launch: LaunchId,
+        enter: bool,
+    },
+    AgentBell {
+        id: SessionId,
+        launch: LaunchId,
+    },
+    AgentTitle {
+        id: SessionId,
+        launch: LaunchId,
+        title: String,
+    },
+    AgentExitSummary {
+        id: SessionId,
+        launch: LaunchId,
+        session_id: String,
     },
     RemoveSession(SessionId),
     RemoveProject(String),
@@ -135,6 +155,21 @@ pub struct Supervisor {
 }
 impl Supervisor {
     pub fn start(path: PathBuf, probe: Option<String>) -> std::io::Result<Self> {
+        Self::start_with_helper(path, probe, std::env::current_exe()?)
+    }
+    /// Explicit helper location supports bundled binaries and headless contract
+    /// tests. Production uses its own executable; no helper path enters TOML.
+    pub fn start_with_helper(
+        path: PathBuf,
+        probe: Option<String>,
+        helper: PathBuf,
+    ) -> std::io::Result<Self> {
+        if !helper.is_absolute() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Hook helper must be an absolute path",
+            ));
+        }
         let (sender, receiver) = mpsc::channel();
         let (events, event_rx) = async_channel::unbounded();
         let handle = SupervisorHandle {
@@ -143,7 +178,9 @@ impl Supervisor {
         let thread = std::thread::Builder::new()
             .name("devdesk-supervisor".into())
             .spawn(move || {
-                Actor::new(path, probe, sender, events).run(receiver);
+                let mut actor = Actor::new(path, probe, sender, events);
+                actor.helper = Some(helper);
+                actor.run(receiver);
             })?;
         Ok(Self {
             handle,
@@ -275,6 +312,7 @@ struct Entry {
 }
 struct Actor {
     // Removal is permanent metadata deletion; close alone only dismisses a tab.
+    helper: Option<PathBuf>,
     removing: BTreeSet<SessionId>,
     hooks: Option<ipc::Server>,
     layout_due: Option<Duration>,
@@ -307,6 +345,7 @@ impl Actor {
         events: async_channel::Sender<CoreEvent>,
     ) -> Self {
         Self {
+            helper: None,
             removing: BTreeSet::new(),
             hooks: None,
             layout_due: None,
@@ -464,6 +503,11 @@ impl Actor {
                                 && self.shutdown_deadline.is_none()
                         }),
                 )
+                .chain(
+                    self.entries
+                        .values()
+                        .filter_map(|entry| entry.agent.as_ref().and_then(|agent| agent.decay_at)),
+                )
                 .chain(self.orphan_check_at)
                 .chain(self.config_due)
                 .chain(self.layout_due)
@@ -596,6 +640,17 @@ impl Actor {
                             process.spawned(self.clock.now());
                             entry.info.status = process.state.clone();
                         }
+                        if let Some(runtime) = &mut entry.agent
+                            && runtime.info.record.provider == agent::Provider::Codex
+                        {
+                            handle.track_output_activity();
+                            if runtime.info.status == agent::Status::Launching {
+                                runtime.info.status = agent::Status::Idle;
+                                if matches!(runtime.request, agent::Request::Fork { .. }) {
+                                    runtime.input(true, self.clock.now());
+                                }
+                            }
+                        }
                         entry.info.agent = entry.agent.as_ref().map(|runtime| runtime.info.clone());
                         self.emit(CoreEvent::SessionStarted {
                             info: self.entries[&id].info.clone(),
@@ -678,7 +733,27 @@ impl Actor {
             return;
         }
         match command {
-            Command::NewAgent { project, picker } => self.new_agent(project, picker),
+            Command::NewAgent {
+                project,
+                picker,
+                provider,
+            } => self.new_agent(project, picker, provider),
+            Command::AgentInput { id, launch, enter } => self.agent_input(id, launch, Some(enter)),
+            Command::AgentBell { id, launch } => self.agent_input(id, launch, None),
+            Command::AgentTitle { id, launch, title } => {
+                if let Some(entry) = self.entries.get_mut(&id)
+                    && entry.info.launch == launch
+                    && let Some(runtime) = &mut entry.agent
+                    && runtime.info.record.provider == agent::Provider::Codex
+                {
+                    runtime.observe_title(&title);
+                }
+            }
+            Command::AgentExitSummary {
+                id,
+                launch,
+                session_id,
+            } => self.agent_exit_summary(id, launch, session_id),
             Command::ForkAgent { parent, question } => self.fork_agent(parent, question),
             Command::ResumeAgent(id) => self.resume_agent(id),
             Command::RemoveSession(id) => self.remove_session(id),
@@ -752,6 +827,7 @@ impl Actor {
             Command::ResolveOrphans { kill } => {
                 self.recovery_pending = false;
                 if kill {
+                    self.capture_codex_orphan_jobs();
                     for orphan in &self.orphans {
                         if let Ok(members) = orphan.session.members() {
                             for member in members {
@@ -900,7 +976,49 @@ impl Actor {
             }
         }
     }
+    /// Codex tool PTYs use their own SIDs. Capture live descendant sessions
+    /// before killing the TUI, and journal each birth identity so a crash during
+    /// escalation can recover it. No ancestry polling is needed while idle.
+    fn track_codex_descendants(&mut self, id: SessionId) {
+        let owner = self.owner(id);
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        if !entry
+            .agent
+            .as_ref()
+            .is_some_and(|runtime| runtime.info.record.provider == agent::Provider::Codex)
+            || entry.stopping.as_ref().is_some_and(|plan| plan.stage > 0)
+        {
+            return;
+        }
+        let Some(session) = &mut entry.session else {
+            return;
+        };
+        let discovered = match session.owned.descendant_sessions() {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                tracing::warn!(%error, "Cannot capture Codex child sessions");
+                return;
+            }
+        };
+        let mut error = None;
+        for owned in &discovered {
+            if let Some(store) = &self.store
+                && let Err(failure) = store.insert(*owned, entry.info.launch.0, &owner)
+            {
+                error = Some(failure);
+            }
+        }
+        session.track_sessions(discovered);
+        if let Some(error) = error {
+            self.emit(CoreEvent::ConfigError(error));
+        }
+    }
     fn stop(&mut self, id: SessionId, close: bool, restart: bool) {
+        if self.entries.contains_key(&id) {
+            self.track_codex_descendants(id);
+        }
         if let Some(entry) = self.entries.get_mut(&id) {
             entry.close |= close;
             entry.restart = restart && !entry.close;
@@ -1023,6 +1141,7 @@ impl Actor {
         let sender = self.sender.clone();
         let probe = self.probe.clone();
         let result_sender = sender.clone();
+        let helper = self.helper.clone();
         if let Err(error) = std::thread::Builder::new()
             .name("devdesk-spawn".into())
             .spawn(move || {
@@ -1038,21 +1157,31 @@ impl Actor {
                         },
                         &environment,
                     )?;
+                    let helper = if let Some(helper) = &helper {
+                        helper.clone()
+                    } else {
+                        std::env::current_exe().map_err(|e| e.to_string())?
+                    };
                     let mut spec = if let Some((record, request, token)) = &agent_launch {
-                        agent::ClaudeProvider.build_launch(
-                            &agent::Context {
-                                record,
-                                request,
-                                launch: launch.0,
-                                token,
-                                socket: socket.as_deref().ok_or(
-                                    "Hook server unavailable; refusing untracked agent launch",
-                                )?,
-                                helper: &std::env::current_exe().map_err(|e| e.to_string())?,
-                                lines,
-                            },
-                            &environment,
-                        )?
+                        let context = agent::Context {
+                            record,
+                            request,
+                            launch: launch.0,
+                            token,
+                            socket: socket.as_deref().ok_or(
+                                "Hook server unavailable; refusing untracked agent launch",
+                            )?,
+                            helper: &helper,
+                            lines,
+                        };
+                        match record.provider {
+                            agent::Provider::Claude => {
+                                agent::ClaudeProvider.build_launch(&context, &environment)?
+                            }
+                            agent::Provider::Codex => {
+                                crate::codex::CodexProvider.build_launch(&context, &environment)?
+                            }
+                        }
                     } else if let Some(process_spec) = &process_spec {
                         process::launch(&project, process_spec, &environment, lines)
                     } else {
@@ -1064,8 +1193,9 @@ impl Actor {
                             scrollback_lines: lines,
                         }
                     };
-                    if agent_launch.is_some()
-                        && let Some(version) = agent::version_warning(&spec.program, &environment)
+                    if let Some((record, _, _)) = &agent_launch
+                        && let Some(version) =
+                            agent::version_warning(record.provider, &spec.program, &environment)
                     {
                         warning = Some(warning.take().map_or_else(
                             || version.clone(),
@@ -1244,10 +1374,10 @@ impl Actor {
         }
         self.emit(CoreEvent::ProjectRemoved(project));
     }
-    fn new_agent(&mut self, project: String, picker: bool) {
+    fn new_agent(&mut self, project: String, picker: bool, provider: agent::Provider) {
         if self.recovery_pending || self.orphan_check_at.is_some() {
             self.emit(CoreEvent::ConfigError(
-                "Resolve previous sessions before launching Claude".into(),
+                "Resolve previous sessions before launching an agent".into(),
             ));
             return;
         }
@@ -1263,15 +1393,17 @@ impl Actor {
             id: uuid::Uuid::new_v4().to_string(),
             project: project.id.clone(),
             name: if picker {
-                "Claude · choose session".into()
+                format!("{} · choose session", provider.label())
             } else {
-                "Claude".into()
+                provider.label().into()
             },
             cwd: project.path.clone(),
             role: agent::Role::Primary,
+            provider,
             parent: None,
             snapshot_at: None,
-            session_id: (!picker).then(|| uuid::Uuid::new_v4().to_string()),
+            session_id: (!picker && provider == agent::Provider::Claude)
+                .then(|| uuid::Uuid::new_v4().to_string()),
         };
         let result = self
             .store
@@ -1340,6 +1472,7 @@ impl Actor {
             name: question.chars().take(48).collect(),
             cwd: record.cwd.clone(),
             role: agent::Role::Side,
+            provider: record.provider,
             session_id: None,
             parent: Some(record.id.clone()),
             snapshot_at: Some(
@@ -1375,7 +1508,7 @@ impl Actor {
         }
         if self.recovery_pending || self.orphan_check_at.is_some() {
             self.emit(CoreEvent::ConfigError(
-                "Resolve previous sessions before resuming Claude".into(),
+                "Resolve previous sessions before resuming an agent".into(),
             ));
             return;
         }
@@ -1389,7 +1522,7 @@ impl Actor {
                         .is_ok_and(|members| members.is_empty())
             }) {
                 self.emit(CoreEvent::ConfigError(
-                    "Previous Claude instance is still running; recover it before resuming".into(),
+                    "Previous agent instance is still running; recover it before resuming".into(),
                 ));
                 return;
             }
@@ -1402,7 +1535,7 @@ impl Actor {
         };
         if entry.session.is_some() || entry.joining || !entry.exited {
             self.emit(CoreEvent::ConfigError(
-                "Stop Claude before resuming this conversation".into(),
+                "Stop the agent before resuming this conversation".into(),
             ));
             return;
         }
@@ -1414,6 +1547,86 @@ impl Actor {
         runtime.launching();
         entry.close = false;
         self.spawn(id);
+    }
+    fn agent_input(&mut self, id: SessionId, launch: LaunchId, enter: Option<bool>) {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        if entry.info.launch != launch || entry.exited || self.removing.contains(&id) {
+            return;
+        }
+        let Some(runtime) = &mut entry.agent else {
+            return;
+        };
+        let previous = runtime.info.status.clone();
+        match enter {
+            Some(enter) => runtime.input(enter, self.clock.now()),
+            None => runtime.bell(),
+        }
+        if previous != runtime.info.status {
+            self.changed(id);
+        }
+    }
+    fn agent_exit_summary(&mut self, id: SessionId, launch: LaunchId, session_id: String) {
+        if uuid::Uuid::parse_str(&session_id).is_err() || self.removing.contains(&id) {
+            return;
+        }
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        let Some(runtime) = &mut entry.agent else {
+            return;
+        };
+        if entry.info.launch != launch
+            || runtime.info.record.provider != agent::Provider::Codex
+            || runtime.info.record.session_id.is_some()
+        {
+            return;
+        }
+        if let agent::Request::Fork {
+            parent_session_id, ..
+        } = &runtime.request
+            && *parent_session_id == session_id
+        {
+            return;
+        }
+        runtime.info.record.session_id = Some(session_id);
+        if let Some(store) = &self.store
+            && let Err(error) = store.save_agent(&runtime.info.record)
+        {
+            self.emit(CoreEvent::ConfigError(error));
+        }
+        self.changed(id);
+    }
+    fn decay_agents(&mut self) {
+        let now = self.clock.now();
+        let mut changed = vec![];
+        for (id, entry) in &mut self.entries {
+            let Some(runtime) = &mut entry.agent else {
+                continue;
+            };
+            if !runtime.decay_at.is_some_and(|deadline| now >= deadline) {
+                continue;
+            }
+            let age = entry
+                .session
+                .as_ref()
+                .map(|session| session.handle.output_age())
+                .unwrap_or(Duration::from_secs(600));
+            let remaining = Duration::from_secs(600).saturating_sub(age);
+            if remaining.is_zero() {
+                let previous = runtime.info.status.clone();
+                runtime.expire_inferred();
+                if previous != runtime.info.status {
+                    changed.push(*id);
+                }
+            } else {
+                runtime.decay_at = Some(now + remaining);
+            }
+        }
+        for id in changed {
+            self.changed(id);
+        }
     }
     fn hook_messages(&mut self) {
         let messages: Vec<_> = self
@@ -1460,13 +1673,14 @@ impl Actor {
             parent_session_id, ..
         } = &runtime.request
             && runtime.info.record.session_id.is_none()
-            && event.event == "SessionStart"
+            && (event.event == "SessionStart" || event.event == "agent-turn-complete")
             && (event.session_id.is_none()
-                || event.source.as_deref() != Some("fork")
+                || (runtime.info.record.provider == agent::Provider::Claude
+                    && event.source.as_deref() != Some("fork"))
                 || event.session_id.as_ref() == Some(parent_session_id))
         {
             self.emit(CoreEvent::ConfigError(
-                "Claude did not report a distinct fork identity; stopping the side conversation"
+                "The CLI did not report a distinct fork identity; stopping the side conversation"
                     .into(),
             ));
             self.stop(id, false, false);
@@ -1760,6 +1974,53 @@ impl Actor {
             });
         }
     }
+    fn capture_codex_orphan_jobs(&mut self) {
+        let Some(store) = &self.store else {
+            return;
+        };
+        let agents = match store.agents() {
+            Ok(agents) => agents,
+            Err(error) => {
+                self.emit(CoreEvent::ConfigError(error));
+                return;
+            }
+        };
+        let owners: BTreeSet<_> = agents
+            .iter()
+            .filter(|agent| agent.provider == agent::Provider::Codex)
+            .map(|agent| format!("agent:{}", agent.id))
+            .collect();
+        let mut extra = vec![];
+        for orphan in &self.orphans {
+            if !owners.contains(&orphan.owner) {
+                continue;
+            }
+            let Ok(sessions) = orphan.session.descendant_sessions() else {
+                continue;
+            };
+            for session in sessions {
+                if self
+                    .orphans
+                    .iter()
+                    .chain(extra.iter())
+                    .any(|old: &Orphan| old.session.leader == session.leader)
+                {
+                    continue;
+                }
+                if let Err(error) = store.insert(session, 0, &orphan.owner) {
+                    self.emit(CoreEvent::ConfigError(error));
+                    return;
+                }
+                let members = session.members().map_or(0, |members| members.len());
+                extra.push(Orphan {
+                    session,
+                    owner: orphan.owner.clone(),
+                    members,
+                });
+            }
+        }
+        self.orphans.extend(extra);
+    }
     fn recover_orphans(&mut self, now: Duration) {
         if !self.orphan_check_at.is_some_and(|due| now >= due) {
             return;
@@ -1795,6 +2056,7 @@ impl Actor {
         }
     }
     fn timers(&mut self) {
+        self.decay_agents();
         let now = self.clock.now();
         if self.layout_due.is_some_and(|deadline| now >= deadline) {
             self.flush_layout();
@@ -1836,6 +2098,7 @@ impl Actor {
             })
             .collect();
         for id in ids {
+            self.track_codex_descendants(id);
             let entry = self.entries.get_mut(&id).expect("scheduled session");
             let stop = entry.stopping.as_mut().expect("scheduled stop");
             stop.next_check = now + Duration::from_millis(100);
@@ -1846,11 +2109,7 @@ impl Actor {
                 if let Some(signal) = stop.due_signal(now) {
                     let _ = session.signal(signal);
                 }
-                session
-                    .owned
-                    .members()
-                    .is_ok_and(|members| members.is_empty())
-                    && entry.drained
+                session.sessions_empty().is_ok_and(|empty| empty) && entry.drained
             } else {
                 entry.exited
             };
@@ -1858,13 +2117,15 @@ impl Actor {
                 continue;
             }
             if let Some(session) = entry.session.take() {
-                let owned = session.owned;
+                let owned = session.owned_sessions();
                 let launch = entry.info.launch;
                 entry.joining = true;
-                if let Some(store) = &self.store
-                    && let Err(error) = store.remove(owned)
-                {
-                    self.emit(CoreEvent::ConfigError(error));
+                if let Some(store) = &self.store {
+                    for session in owned {
+                        if let Err(error) = store.remove(session) {
+                            self.emit(CoreEvent::ConfigError(error));
+                        }
+                    }
                 }
                 let sender = self.sender.clone();
                 // Joining may perform OS work; keep the actor responsive too.
@@ -1926,6 +2187,7 @@ mod tests {
                 name: "Side".into(),
                 cwd: PathBuf::from("/tmp"),
                 role: agent::Role::Side,
+                provider: crate::agent::Provider::Claude,
                 session_id: None,
                 parent: Some(uuid::Uuid::new_v4().to_string()),
                 snapshot_at: Some(1),
@@ -1978,6 +2240,7 @@ mod tests {
             name: "Claude".into(),
             cwd: PathBuf::from("/tmp"),
             role: agent::Role::Primary,
+            provider: crate::agent::Provider::Claude,
             parent: None,
             snapshot_at: None,
             session_id: Some(uuid::Uuid::new_v4().to_string()),

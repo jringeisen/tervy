@@ -15,3 +15,5 @@ pub mod agent;
 pub mod hook;
 pub mod ipc;
 pub mod layout;
+
+pub mod codex;

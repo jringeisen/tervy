@@ -12,6 +12,7 @@ workspace = true
 devdesk-term.workspace = true
 libc.workspace = true
 async-channel.workspace = true
+tracing.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

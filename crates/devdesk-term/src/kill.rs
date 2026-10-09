@@ -59,6 +59,31 @@ fn bsd_info(pid: i32) -> io::Result<libc::proc_bsdinfo> {
     Ok(info)
 }
 
+fn process_ids() -> io::Result<Vec<i32>> {
+    // SAFETY: null asks for the count; the following call owns its buffer.
+    let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if count <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut pids = vec![0i32; count as usize + 256];
+    let length = unsafe {
+        libc::proc_listallpids(
+            pids.as_mut_ptr().cast(),
+            (pids.len() * std::mem::size_of::<i32>()) as i32,
+        )
+    };
+    if length <= 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if length as usize >= pids.len() {
+        return Err(io::Error::other(
+            "process list changed; retry session sweep",
+        ));
+    }
+    pids.truncate(length as usize);
+    Ok(pids)
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct OwnedSession {
     pub leader: ProcessIdentity,
@@ -83,28 +108,9 @@ impl OwnedSession {
         {
             return Ok(Vec::new());
         }
-        // SAFETY: null asks for the count; the following call owns its buffer.
-        let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-        if count <= 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let mut pids = vec![0i32; count as usize + 256];
-        let length = unsafe {
-            libc::proc_listallpids(
-                pids.as_mut_ptr().cast(),
-                (pids.len() * std::mem::size_of::<i32>()) as i32,
-            )
-        };
-        if length <= 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if length as usize >= pids.len() {
-            return Err(io::Error::other(
-                "process list changed; retry session sweep",
-            ));
-        }
+        let pids = process_ids()?;
         let mut members = Vec::new();
-        for &pid in &pids[..length as usize] {
+        for &pid in &pids {
             if pid <= 0 || unsafe { libc::getsid(pid) } != self.leader.pid {
                 continue;
             }
@@ -119,6 +125,64 @@ impl OwnedSession {
             }
         }
         Ok(members)
+    }
+
+    /// Explicit opt-in for a CLI which creates separate sessions for its tool
+    /// jobs. Discover only while its original leader is alive; never infer
+    /// ownership from a process name or a reused PID. Call before signalling
+    /// the parent, then retain and journal the captured birth identities.
+    pub fn descendant_sessions(self) -> io::Result<Vec<Self>> {
+        use std::collections::{BTreeMap, BTreeSet};
+        if ProcessIdentity::read(self.leader.pid)? != self.leader {
+            return Err(io::Error::other("Session leader identity changed"));
+        }
+        let mut records = BTreeMap::new();
+        for pid in process_ids()? {
+            if let Ok(info) = bsd_info(pid) {
+                let identity = ProcessIdentity {
+                    pid,
+                    started_us: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+                };
+                if info.pbi_status != 5 && identity.started_us >= self.leader.started_us {
+                    records.insert(pid, (info.pbi_ppid as i32, identity));
+                }
+            }
+        }
+        let mut descendants = BTreeSet::from([self.leader.pid]);
+        loop {
+            let mut added = false;
+            for (&pid, &(parent, child)) in &records {
+                if descendants.contains(&pid) || !descendants.contains(&parent) {
+                    continue;
+                }
+                let Some(&(_, ancestor)) = records.get(&parent) else {
+                    continue;
+                };
+                if ancestor.started_us <= child.started_us
+                    && ProcessIdentity::read(parent).ok() == Some(ancestor)
+                {
+                    descendants.insert(pid);
+                    added = true;
+                }
+            }
+            if !added {
+                break;
+            }
+        }
+        let mut sessions = Vec::new();
+        for pid in descendants {
+            if pid == self.leader.pid || unsafe { libc::getsid(pid) } != pid {
+                continue;
+            }
+            if let Ok(session) = Self::capture(pid as u32)
+                && records
+                    .get(&pid)
+                    .is_some_and(|(_, identity)| *identity == session.leader)
+            {
+                sessions.push(session);
+            }
+        }
+        Ok(sessions)
     }
 
     /// Signal foreground and leader groups while their identity is known,

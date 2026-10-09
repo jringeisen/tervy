@@ -80,6 +80,8 @@ pub type LifecycleObserver = Box<dyn Fn(TerminalSignal) + Send + Sync>;
 #[derive(Clone)]
 pub struct EventProxy {
     dirty: Arc<AtomicBool>,
+    activity_enabled: Arc<AtomicBool>,
+    last_output_ms: Arc<std::sync::atomic::AtomicU64>,
     pub(crate) alive: Arc<AtomicBool>,
     signals: Sender<TerminalSignal>,
     events: Sender<Event>,
@@ -91,7 +93,12 @@ pub struct EventProxy {
 impl EventListener for EventProxy {
     fn send_event(&self, event: Event) {
         match event {
-            Event::Wakeup => self.wakeup(),
+            Event::Wakeup => {
+                if self.activity_enabled.load(Ordering::Relaxed) {
+                    self.last_output_ms.store(activity_ms(), Ordering::Relaxed);
+                }
+                self.wakeup();
+            }
             Event::ChildExit(status) => {
                 self.alive.store(false, Ordering::Release);
                 if let Some(notify) = self.lifecycle.get() {
@@ -135,6 +142,8 @@ impl EventProxy {
         (
             Self {
                 dirty: Arc::new(AtomicBool::new(false)),
+                activity_enabled: Arc::new(AtomicBool::new(false)),
+                last_output_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
                 alive: Arc::new(AtomicBool::new(true)),
                 signals,
                 events,
@@ -173,6 +182,20 @@ pub struct TerminalHandle {
 }
 
 impl TerminalHandle {
+    /// Codex alone needs a monotonic output age for inferred-status expiry.
+    /// The parser updates one atomic per output batch, never the actor mailbox.
+    /// UI invalidation does not count as output and no timer runs here.
+    pub fn track_output_activity(&self) {
+        self.proxy
+            .last_output_ms
+            .store(activity_ms(), Ordering::Relaxed);
+        self.proxy.activity_enabled.store(true, Ordering::Release);
+    }
+    pub fn output_age(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(
+            activity_ms().saturating_sub(self.proxy.last_output_ms.load(Ordering::Relaxed)),
+        )
+    }
     pub fn write(&self, bytes: impl Into<Vec<u8>>) {
         let bytes = bytes.into();
         if !bytes.is_empty() {
@@ -220,6 +243,14 @@ impl TerminalHandle {
         }
         true
     }
+}
+
+fn activity_ms() -> u64 {
+    static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
+    ORIGIN
+        .get_or_init(std::time::Instant::now)
+        .elapsed()
+        .as_millis() as u64
 }
 
 #[cfg(test)]
@@ -271,6 +302,17 @@ mod tests {
         assert!(events.signals.is_empty());
     }
 
+    #[test]
+    fn output_activity_counts_coalesced_output_but_not_view_invalidation() {
+        let (proxy, _events) = EventProxy::new();
+        proxy.activity_enabled.store(true, Ordering::Relaxed);
+        proxy.last_output_ms.store(u64::MAX, Ordering::Relaxed);
+        proxy.wakeup();
+        assert_eq!(proxy.last_output_ms.load(Ordering::Relaxed), u64::MAX);
+        // Dirty is already set: a coalesced output batch must still renew age.
+        proxy.send_event(Event::Wakeup);
+        assert_ne!(proxy.last_output_ms.load(Ordering::Relaxed), u64::MAX);
+    }
     #[test]
     fn metadata_flood_is_bounded_and_cannot_hide_exit() {
         let (proxy, events) = EventProxy::new();
