@@ -46,7 +46,7 @@ pub struct Project {
     pub agents: AgentDefaults,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessSpec {
     pub id: String,
@@ -71,7 +71,7 @@ fn default_signal() -> String {
 fn default_timeout() -> u64 {
     10
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RestartPolicy {
     pub policy: String,

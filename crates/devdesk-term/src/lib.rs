@@ -18,3 +18,4 @@ pub use alacritty_terminal::vte::ansi::{CursorShape, Rgb};
 pub use pty::{SpawnSpec, TerminalSession};
 pub use terminal::{Dimensions, TerminalEvents, TerminalHandle, TerminalSignal};
 pub mod kill;
+mod restart;

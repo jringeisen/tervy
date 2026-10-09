@@ -3,11 +3,15 @@
 //! actor mailbox, while output/wakeups go directly to the terminal view.
 use crate::config::{self, Config};
 use crate::env::ShellEnvironment;
+use crate::{
+    process,
+    store::{Orphan, Store},
+};
 use devdesk_term::{
     Dimensions, SpawnSpec, TerminalEvents, TerminalHandle, TerminalSession, TerminalSignal,
 };
 use notify::Watcher;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -18,6 +22,7 @@ pub struct SessionId(pub u64);
 pub struct LaunchId(pub u64);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionStatus {
+    Stopped,
     Starting,
     Running,
     Stopping,
@@ -26,6 +31,8 @@ pub enum SessionStatus {
 }
 #[derive(Clone, Debug)]
 pub struct SessionInfo {
+    pub process: Option<String>,
+    pub config_changed: bool,
     pub pid: Option<u32>,
     pub id: SessionId,
     pub launch: LaunchId,
@@ -44,6 +51,15 @@ pub enum Command {
         confirmed: Option<LaunchId>,
     },
     Restart(SessionId),
+    Start(SessionId),
+    Stop(SessionId),
+    StartAll(String),
+    StopAll(String),
+    ProjectOpened(String),
+    ShowOrphans,
+    ResolveOrphans {
+        kill: bool,
+    },
     Rename {
         id: SessionId,
         name: String,
@@ -53,6 +69,7 @@ pub enum Command {
     Shutdown,
 }
 pub enum CoreEvent {
+    Orphans(Vec<Orphan>),
     Config(Config),
     ConfigError(String),
     ProjectAdded(String),
@@ -122,6 +139,11 @@ impl Drop for Supervisor {
 }
 
 enum Message {
+    Reaped {
+        id: SessionId,
+        launch: LaunchId,
+        result: Result<TerminalHandle, String>,
+    },
     Command(Command),
     ConfigChanged,
     WatchError(String),
@@ -154,6 +176,9 @@ struct StopPlan {
     started: Duration,
     next_check: Duration,
     stage: u8,
+    first_signal: i32,
+    term_after: Duration,
+    kill_after: Duration,
 }
 impl StopPlan {
     fn new(now: Duration) -> Self {
@@ -161,13 +186,27 @@ impl StopPlan {
             started: now,
             next_check: now,
             stage: 0,
+            first_signal: libc::SIGHUP,
+            term_after: Duration::from_secs(2),
+            kill_after: Duration::from_secs(5),
         }
+    }
+    fn for_process(now: Duration, spec: &config::ProcessSpec) -> Self {
+        let mut plan = Self::new(now);
+        plan.first_signal = match spec.stop_signal.as_str() {
+            "SIGTERM" => libc::SIGTERM,
+            "SIGHUP" => libc::SIGHUP,
+            _ => libc::SIGINT,
+        };
+        plan.term_after = Duration::from_secs(spec.stop_timeout_secs);
+        plan.kill_after = plan.term_after + Duration::from_secs(3);
+        plan
     }
     fn due_signal(&mut self, now: Duration) -> Option<i32> {
         let age = now.saturating_sub(self.started);
-        let next = if age >= Duration::from_secs(5) {
+        let next = if age >= self.kill_after {
             3
-        } else if age >= Duration::from_secs(2) {
+        } else if age >= self.term_after {
             2
         } else {
             1
@@ -175,7 +214,7 @@ impl StopPlan {
         if next > self.stage {
             self.stage = next;
             Some(match next {
-                1 => libc::SIGHUP,
+                1 => self.first_signal,
                 2 => libc::SIGTERM,
                 _ => libc::SIGKILL,
             })
@@ -187,6 +226,10 @@ impl StopPlan {
     }
 }
 struct Entry {
+    process: Option<process::Runtime>,
+    desired: Option<config::ProcessSpec>,
+    history: Option<TerminalHandle>,
+    joining: bool,
     info: SessionInfo,
     session: Option<TerminalSession>,
     size: Dimensions,
@@ -197,6 +240,12 @@ struct Entry {
     exited: bool,
 }
 struct Actor {
+    store: Option<Store>,
+    orphans: Vec<Orphan>,
+    recovery_pending: bool,
+    orphan_kill_at: Option<Duration>,
+    orphan_check_at: Option<Duration>,
+    opened: BTreeSet<String>,
     path: PathBuf,
     probe: Option<String>,
     config: Config,
@@ -218,6 +267,12 @@ impl Actor {
         events: async_channel::Sender<CoreEvent>,
     ) -> Self {
         Self {
+            store: None,
+            orphans: vec![],
+            recovery_pending: false,
+            orphan_kill_at: None,
+            orphan_check_at: None,
+            opened: BTreeSet::new(),
             path,
             probe,
             config: Config::default(),
@@ -237,7 +292,11 @@ impl Actor {
     }
     fn changed(&self, id: SessionId) {
         if let Some(entry) = self.entries.get(&id) {
-            self.emit(CoreEvent::SessionChanged(entry.info.clone()));
+            let mut info = entry.info.clone();
+            if let Some(process) = &entry.process {
+                info.status = process.state.clone();
+            }
+            self.emit(CoreEvent::SessionChanged(info));
         }
     }
     fn load_config(&mut self) {
@@ -245,6 +304,7 @@ impl Actor {
             Ok(config) => {
                 self.config = config;
                 self.emit(CoreEvent::Config(self.config.clone()));
+                self.sync_processes();
             }
             Err(error) => self.emit(CoreEvent::ConfigError(error)),
         }
@@ -269,7 +329,31 @@ impl Actor {
             }
             self.emit(CoreEvent::Config(self.config.clone()));
         } else {
+            if let Err(error) = config::initialize(&self.path) {
+                self.emit(CoreEvent::ConfigError(error));
+            }
+            match Store::open(&self.path.with_file_name("state.db")) {
+                Ok(store) => {
+                    match store.survivors() {
+                        Ok(orphans) => {
+                            self.recovery_pending = !orphans.is_empty();
+                            self.orphans = orphans;
+                        }
+                        Err(error) => {
+                            self.emit(CoreEvent::ConfigError(error));
+                            self.recovery_pending = true;
+                        }
+                    }
+                    self.store = Some(store);
+                }
+                Err(error) => self.emit(CoreEvent::ConfigError(format!(
+                    "Session ledger unavailable: {error}"
+                ))),
+            }
             self.load_config();
+            if self.recovery_pending && !self.orphans.is_empty() {
+                self.emit(CoreEvent::Orphans(self.orphans.clone()));
+            }
             // FSEvents reports canonical paths (e.g. /private/var, not /var).
             if let Ok(path) = self.path.canonicalize() {
                 self.path = path;
@@ -308,6 +392,19 @@ impl Actor {
                 .entries
                 .values()
                 .filter_map(|entry| entry.stopping.as_ref().map(|stop| stop.next_check))
+                .chain(
+                    self.entries
+                        .values()
+                        .filter_map(|entry| {
+                            entry.process.as_ref().and_then(|process| process.retry_at)
+                        })
+                        .filter(|_| {
+                            !self.recovery_pending
+                                && self.orphan_check_at.is_none()
+                                && self.shutdown_deadline.is_none()
+                        }),
+                )
+                .chain(self.orphan_check_at)
                 .chain(self.config_due)
                 .chain(self.shutdown_deadline)
                 .min();
@@ -326,7 +423,10 @@ impl Actor {
                 self.message(message);
             }
             self.timers();
-            if self.shutdown_deadline.is_some() && self.entries.is_empty() {
+            if self.shutdown_deadline.is_some()
+                && self.entries.is_empty()
+                && self.orphan_check_at.is_none()
+            {
                 self.emit(CoreEvent::ShutdownComplete { clean: true });
                 break;
             }
@@ -346,6 +446,36 @@ impl Actor {
     }
     fn message(&mut self, message: Message) {
         match message {
+            Message::Reaped { id, launch, result } => {
+                if !self
+                    .entries
+                    .get(&id)
+                    .is_some_and(|entry| entry.info.launch == launch)
+                {
+                    return;
+                }
+                match result {
+                    Ok(history) => {
+                        let entry = self.entries.get_mut(&id).expect("registered handoff");
+                        entry.joining = false;
+                        entry.history = Some(history);
+                        if let Some(process) = &mut entry.process {
+                            process.cleaned(self.clock.now());
+                        }
+                        self.complete_stop(id);
+                    }
+                    Err(error) => {
+                        let entry = self.entries.get_mut(&id).expect("registered handoff");
+                        entry.joining = false;
+                        entry.info.status = SessionStatus::Failed(error.clone());
+                        if let Some(process) = &mut entry.process {
+                            process.fail(error);
+                            entry.restart = false;
+                        }
+                        self.complete_stop(id);
+                    }
+                }
+            }
             Message::ConfigChanged => {
                 self.config_due = Some(self.clock.now() + Duration::from_millis(120))
             }
@@ -369,12 +499,36 @@ impl Actor {
                 }
                 match *result {
                     Ok((session, events)) => {
+                        let owner = self.owner(id);
+                        let recorded = if self.probe.is_some() {
+                            Ok(())
+                        } else {
+                            self.store
+                                .as_ref()
+                                .ok_or_else(|| {
+                                    "Session ledger unavailable; refusing untracked spawn"
+                                        .to_string()
+                                })
+                                .and_then(|store| store.insert(session.owned, launch.0, &owner))
+                        };
+                        if let Err(error) = recorded {
+                            let entry = self.entries.get_mut(&id).expect("registered spawn");
+                            entry.close = true;
+                            entry.session = Some(session);
+                            entry.stopping = Some(StopPlan::new(self.clock.now()));
+                            self.emit(CoreEvent::ConfigError(error));
+                            return;
+                        }
                         let handle = session.handle.clone();
                         let entry = self.entries.get_mut(&id).expect("checked session");
                         entry.info.pid = Some(session.pid);
                         entry.session = Some(session);
                         if entry.stopping.is_none() && !entry.exited {
                             entry.info.status = SessionStatus::Running;
+                        }
+                        if let Some(process) = &mut entry.process {
+                            process.spawned(self.clock.now());
+                            entry.info.status = process.state.clone();
                         }
                         self.emit(CoreEvent::SessionStarted {
                             info: self.entries[&id].info.clone(),
@@ -388,7 +542,11 @@ impl Actor {
                         let entry = self.entries.get_mut(&id).expect("checked session");
                         entry.exited = true;
                         entry.drained = true;
-                        entry.info.status = SessionStatus::Failed(error);
+                        entry.info.status = SessionStatus::Failed(error.clone());
+                        if let Some(process) = &mut entry.process {
+                            process.spawn_failed(error, self.clock.now());
+                            entry.info.status = process.state.clone();
+                        }
                         if entry.close {
                             self.entries.remove(&id);
                             self.emit(CoreEvent::SessionClosed(id));
@@ -406,6 +564,9 @@ impl Actor {
                     match signal {
                         TerminalSignal::ChildExit(status) => {
                             entry.exited = true;
+                            if let Some(process) = &mut entry.process {
+                                process.exited(status.code());
+                            }
                             if entry.stopping.is_none() {
                                 entry.info.status = SessionStatus::Exited {
                                     code: status.code(),
@@ -413,9 +574,14 @@ impl Actor {
                             }
                             // A dead shell may leave jobs holding its PTY. Clean
                             // those up even if the terminal never reaches EOF.
-                            entry
-                                .stopping
-                                .get_or_insert_with(|| StopPlan::new(self.clock.now()));
+                            entry.stopping.get_or_insert_with(|| {
+                                entry.process.as_ref().map_or_else(
+                                    || StopPlan::new(self.clock.now()),
+                                    |process| {
+                                        StopPlan::for_process(self.clock.now(), &process.spec)
+                                    },
+                                )
+                            });
                         }
                         TerminalSignal::Exit => entry.drained = true,
                         TerminalSignal::Wakeup => {
@@ -432,11 +598,77 @@ impl Actor {
             return;
         }
         match command {
+            Command::Start(id) => self.start_process(id, true),
+            Command::Stop(id) => self.stop(id, false, false),
+            Command::StartAll(project) => {
+                let ids: Vec<_> = self
+                    .entries
+                    .iter()
+                    .filter(|(_, entry)| entry.info.project == project && entry.process.is_some())
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in ids {
+                    self.start_process(id, true);
+                }
+            }
+            Command::StopAll(project) => {
+                let ids: Vec<_> = self
+                    .entries
+                    .iter()
+                    .filter(|(_, entry)| entry.info.project == project && entry.process.is_some())
+                    .map(|(id, _)| *id)
+                    .collect();
+                for id in ids {
+                    self.stop(id, false, false);
+                }
+            }
+            Command::ProjectOpened(project) => {
+                if self.opened.insert(project.clone()) && !self.recovery_pending {
+                    self.autostart(&project);
+                }
+            }
+            Command::ShowOrphans => {
+                if let Some(store) = &self.store {
+                    match store.survivors() {
+                        Ok(orphans) => {
+                            self.orphans = orphans;
+                            if !self.orphans.is_empty() {
+                                self.recovery_pending = true;
+                                self.emit(CoreEvent::Orphans(self.orphans.clone()));
+                            } else {
+                                self.emit(CoreEvent::ConfigError(
+                                    "No previous processes are still running".into(),
+                                ));
+                            }
+                        }
+                        Err(error) => self.emit(CoreEvent::ConfigError(error)),
+                    }
+                }
+            }
+            Command::ResolveOrphans { kill } => {
+                self.recovery_pending = false;
+                if kill {
+                    for orphan in &self.orphans {
+                        if let Ok(members) = orphan.session.members() {
+                            for member in members {
+                                let _ = member.signal(libc::SIGTERM, orphan.session.leader.pid);
+                            }
+                        }
+                    }
+                    self.orphan_kill_at = Some(self.clock.now() + Duration::from_secs(3));
+                    self.orphan_check_at = Some(self.clock.now());
+                } else {
+                    for project in self.opened.clone() {
+                        self.autostart(&project);
+                    }
+                }
+            }
             Command::ReloadConfig => self.load_config(),
             Command::AddProject(folder) => match config::append_project(&self.path, &folder) {
                 Ok((config, id)) => {
                     self.config = config;
                     self.emit(CoreEvent::Config(self.config.clone()));
+                    self.sync_processes();
                     self.emit(CoreEvent::ProjectAdded(id));
                 }
                 Err(error) => self.emit(CoreEvent::ConfigError(error)),
@@ -453,7 +685,13 @@ impl Actor {
                 self.entries.insert(
                     id,
                     Entry {
+                        process: None,
+                        desired: None,
+                        history: None,
+                        joining: false,
                         info: SessionInfo {
+                            process: None,
+                            config_changed: false,
                             pid: None,
                             id,
                             launch: LaunchId(0),
@@ -487,6 +725,14 @@ impl Actor {
                 }
             }
             Command::Close { id, confirmed } => {
+                if self
+                    .entries
+                    .get(&id)
+                    .is_some_and(|entry| entry.process.is_some())
+                {
+                    self.stop(id, false, false);
+                    return;
+                }
                 if let Some(entry) = self.entries.get(&id)
                     && confirmed != Some(entry.info.launch)
                     && let Some(job) = entry
@@ -503,7 +749,18 @@ impl Actor {
                     self.stop(id, true, false);
                 }
             }
-            Command::Restart(id) => self.stop(id, false, true),
+            Command::Restart(id) => {
+                if self.entries.get(&id).is_some_and(|entry| {
+                    entry.process.is_some()
+                        && entry.session.is_none()
+                        && !entry.joining
+                        && entry.exited
+                }) {
+                    self.start_process(id, true);
+                } else {
+                    self.stop(id, false, true);
+                }
+            }
             Command::Shutdown => {
                 if self.shutdown_deadline.is_none() {
                     self.shutdown_deadline = Some(self.clock.now() + Duration::from_secs(15));
@@ -526,10 +783,31 @@ impl Actor {
                 .stopping
                 .get_or_insert_with(|| StopPlan::new(self.clock.now()));
             entry.info.status = SessionStatus::Stopping;
+            if let Some(process) = &mut entry.process {
+                process.stop();
+                let plan = StopPlan::for_process(self.clock.now(), &process.spec);
+                // Repeated clicks never extend an already-running stop deadline.
+                if entry.stopping.as_ref().is_some_and(|stop| stop.stage == 0) {
+                    entry.stopping = Some(plan);
+                }
+            }
             self.changed(id);
         }
     }
     fn spawn(&mut self, id: SessionId) {
+        if self.probe.is_none() && self.store.is_none() {
+            let entry = self.entries.get_mut(&id).expect("registered spawn");
+            let error =
+                "Session ledger unavailable; restart DevDesk after repairing state.db".to_string();
+            entry.info.status = SessionStatus::Failed(error.clone());
+            entry.exited = true;
+            entry.drained = true;
+            if let Some(process) = &mut entry.process {
+                process.fail(error);
+            }
+            self.changed(id);
+            return;
+        }
         let entry = self.entries.get_mut(&id).expect("registered before spawn");
         let Some(project) = self
             .config
@@ -538,12 +816,53 @@ impl Actor {
             .find(|project| project.id == entry.info.project)
         else {
             entry.info.status = SessionStatus::Failed("Project was removed from config".into());
+            if let Some(process) = &mut entry.process {
+                process.fail("Project was removed from config".into());
+            }
             entry.exited = true;
             entry.drained = true;
             entry.stopping = None;
             self.changed(id);
             return;
         };
+        let project = project.clone();
+        let process_spec = if entry.process.is_some() {
+            entry.desired.clone()
+        } else {
+            None
+        };
+        if entry.process.is_some() && process_spec.is_none() {
+            entry.info.status = SessionStatus::Failed("Process was removed from config".into());
+            if let Some(process) = &mut entry.process {
+                process.fail("Process was removed from config".into());
+            }
+            entry.exited = true;
+            entry.drained = true;
+            self.changed(id);
+            return;
+        }
+        if let (Some(process), Some(spec)) = (&mut entry.process, &process_spec) {
+            entry.info.name = spec.name.clone();
+            process.spec = spec.clone();
+        }
+        entry.info.config_changed = false;
+        let history = if entry.process.is_some() {
+            entry.history.clone()
+        } else {
+            None
+        };
+        let separator = entry
+            .process
+            .as_ref()
+            .map(|process| {
+                format!(
+                    "── restarted after exit {} ──",
+                    process
+                        .last_exit
+                        .map_or_else(|| "signal / stop".into(), |code| code.to_string())
+                )
+            })
+            .unwrap_or_default();
         let cwd = project.path.clone();
         let size = entry.size;
         let lines = self.config.settings.scrollback_lines;
@@ -575,22 +894,29 @@ impl Actor {
                         },
                         &environment,
                     )?;
-                    let mut env = environment.variables.clone();
-                    env.insert("DEVDESK_SESSION_ID".into(), id.0.to_string());
-                    env.insert("DEVDESK_LAUNCH_ID".into(), launch.0.to_string());
-                    spawn_started = probe.as_ref().map(|_| Instant::now());
-                    TerminalSession::spawn_observed(
+                    let mut spec = if let Some(process_spec) = &process_spec {
+                        process::launch(&project, process_spec, &environment, lines)
+                    } else {
                         SpawnSpec {
                             program,
                             args,
                             cwd,
-                            env,
+                            env: environment.variables.clone(),
                             scrollback_lines: lines,
-                        },
+                        }
+                    };
+                    let env = &mut spec.env;
+                    env.insert("DEVDESK_SESSION_ID".into(), id.0.to_string());
+                    env.insert("DEVDESK_LAUNCH_ID".into(), launch.0.to_string());
+                    spawn_started = probe.as_ref().map(|_| Instant::now());
+                    TerminalSession::spawn_reusing(
+                        spec,
                         size,
                         Some(Box::new(move |signal| {
                             let _ = sender.send(Message::Lifecycle { id, launch, signal });
                         })),
+                        history,
+                        &separator,
                     )
                     .map_err(|error| error.to_string())
                 })();
@@ -620,11 +946,227 @@ impl Actor {
             });
         }
     }
+    fn owner(&self, id: SessionId) -> String {
+        let info = &self.entries[&id].info;
+        info.process.as_ref().map_or_else(
+            || format!("shell:{}:{}", info.project, id.0),
+            |process| format!("process:{}/{}", info.project, process),
+        )
+    }
+    fn sync_processes(&mut self) {
+        let configured: Vec<_> = self
+            .config
+            .projects
+            .iter()
+            .flat_map(|project| {
+                project
+                    .processes
+                    .iter()
+                    .map(|spec| (project.id.clone(), spec.clone()))
+            })
+            .collect();
+        for entry in self.entries.values_mut() {
+            if let Some(runtime) = &entry.process {
+                entry.desired = configured
+                    .iter()
+                    .find(|(project, spec)| {
+                        project == &entry.info.project
+                            && Some(&spec.id) == entry.info.process.as_ref()
+                    })
+                    .map(|(_, spec)| spec.clone());
+                entry.info.config_changed = entry.desired.as_ref() != Some(&runtime.spec);
+            }
+        }
+        for (project, spec) in configured {
+            if self.entries.values().any(|entry| {
+                entry.info.project == project && entry.info.process.as_ref() == Some(&spec.id)
+            }) {
+                continue;
+            }
+            let id = SessionId(self.next_id);
+            self.next_id += 1;
+            self.entries.insert(
+                id,
+                Entry {
+                    info: SessionInfo {
+                        id,
+                        launch: LaunchId(0),
+                        pid: None,
+                        project,
+                        name: spec.name.clone(),
+                        process: Some(spec.id.clone()),
+                        config_changed: false,
+                        status: SessionStatus::Stopped,
+                    },
+                    process: Some(process::Runtime::new(spec.clone())),
+                    desired: Some(spec),
+                    history: None,
+                    joining: false,
+                    session: None,
+                    size: Dimensions::default(),
+                    stopping: None,
+                    close: false,
+                    restart: false,
+                    drained: true,
+                    exited: true,
+                },
+            );
+        }
+        for id in self.entries.keys().copied().collect::<Vec<_>>() {
+            if self.entries[&id].process.is_some() {
+                self.changed(id);
+            }
+        }
+    }
+    fn start_process(&mut self, id: SessionId, manual: bool) {
+        if self.recovery_pending
+            || self.orphan_check_at.is_some()
+            || self.shutdown_deadline.is_some()
+        {
+            self.emit(CoreEvent::ConfigError(
+                "Resolve previous sessions before starting processes".into(),
+            ));
+            return;
+        }
+        let owner = if self.entries.contains_key(&id) {
+            self.owner(id)
+        } else {
+            return;
+        };
+        if self.orphans.iter().any(|orphan| {
+            orphan.owner == owner
+                && !orphan
+                    .session
+                    .members()
+                    .is_ok_and(|members| members.is_empty())
+        }) {
+            self.emit(CoreEvent::ConfigError("Previous instance is still running; use Recover Previous Sessions to stop it first".into()));
+            if let Some(runtime) = self
+                .entries
+                .get_mut(&id)
+                .and_then(|entry| entry.process.as_mut())
+            {
+                runtime.retry_at = None;
+            }
+            return;
+        }
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        if entry.session.is_some() || entry.joining || entry.stopping.is_some() || !entry.exited {
+            return;
+        }
+        if entry.desired.is_none() {
+            if let Some(runtime) = &mut entry.process {
+                runtime.retry_at = None;
+            }
+            self.emit(CoreEvent::ConfigError(
+                "Process is no longer configured".into(),
+            ));
+            return;
+        }
+        let Some(runtime) = entry.process.as_mut() else {
+            return;
+        };
+        runtime.start(manual);
+        self.spawn(id);
+    }
+    fn autostart(&mut self, project: &str) {
+        let ids: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.info.project == project
+                    && entry.desired.as_ref().is_some_and(|spec| spec.autostart)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.start_process(id, true);
+        }
+    }
+    fn complete_stop(&mut self, id: SessionId) {
+        let Some(entry) = self.entries.get_mut(&id) else {
+            return;
+        };
+        entry.stopping = None;
+        if entry.close {
+            self.entries.remove(&id);
+            self.emit(CoreEvent::SessionClosed(id));
+        } else if entry.restart {
+            if let Some(runtime) = &mut entry.process {
+                runtime.start(true);
+            }
+            self.spawn(id);
+        } else {
+            self.changed(id);
+        }
+        if self.shutdown_deadline.is_some() {
+            self.emit(CoreEvent::ShutdownProgress {
+                remaining: self.entries.len(),
+            });
+        }
+    }
+    fn recover_orphans(&mut self, now: Duration) {
+        if !self.orphan_check_at.is_some_and(|due| now >= due) {
+            return;
+        }
+        self.orphan_check_at = Some(now + Duration::from_millis(100));
+        let kill = self.orphan_kill_at.is_some_and(|due| now >= due);
+        let mut remaining = vec![];
+        for orphan in self.orphans.drain(..) {
+            match orphan.session.members() {
+                Ok(members) if members.is_empty() => {
+                    if let Some(store) = &self.store {
+                        let _ = store.remove(orphan.session);
+                    }
+                }
+                Ok(members) => {
+                    if kill {
+                        for member in members {
+                            let _ = member.signal(libc::SIGKILL, orphan.session.leader.pid);
+                        }
+                    }
+                    remaining.push(orphan);
+                }
+                Err(_) => remaining.push(orphan),
+            }
+        }
+        self.orphans = remaining;
+        if self.orphans.is_empty() {
+            self.orphan_check_at = None;
+            self.orphan_kill_at = None;
+            for project in self.opened.clone() {
+                self.autostart(&project);
+            }
+        }
+    }
     fn timers(&mut self) {
         let now = self.clock.now();
         if self.config_due.is_some_and(|deadline| now >= deadline) {
             self.config_due = None;
             self.load_config();
+        }
+        self.recover_orphans(now);
+        let retries: Vec<_> = self
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry
+                    .process
+                    .as_ref()
+                    .is_some_and(|process| process.retry_due(now))
+                    && !self.recovery_pending
+                    && self.orphan_check_at.is_none()
+                    && self.shutdown_deadline.is_none()
+                    && entry.session.is_none()
+                    && !entry.joining
+                    && entry.stopping.is_none()
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in retries {
+            self.start_process(id, false);
         }
         let ids: Vec<_> = self
             .entries
@@ -641,6 +1183,9 @@ impl Actor {
             let entry = self.entries.get_mut(&id).expect("scheduled session");
             let stop = entry.stopping.as_mut().expect("scheduled stop");
             stop.next_check = now + Duration::from_millis(100);
+            if entry.joining {
+                continue;
+            }
             let empty = if let Some(session) = &entry.session {
                 if let Some(signal) = stop.due_signal(now) {
                     let _ = session.signal(signal);
@@ -656,23 +1201,26 @@ impl Actor {
             if !empty {
                 continue;
             }
-            let close = entry.close;
-            let restart = entry.restart;
-            // Drop delegates reader shutdown/join to term's reaper worker.
-            entry.session.take();
-            entry.stopping = None;
-            if close {
-                self.entries.remove(&id);
-                self.emit(CoreEvent::SessionClosed(id));
-            } else if restart {
-                self.spawn(id);
-            } else {
-                self.changed(id);
-            }
-            if self.shutdown_deadline.is_some() {
-                self.emit(CoreEvent::ShutdownProgress {
-                    remaining: self.entries.len(),
+            if let Some(session) = entry.session.take() {
+                let owned = session.owned;
+                let launch = entry.info.launch;
+                entry.joining = true;
+                if let Some(store) = &self.store
+                    && let Err(error) = store.remove(owned)
+                {
+                    self.emit(CoreEvent::ConfigError(error));
+                }
+                let sender = self.sender.clone();
+                // Joining may perform OS work; keep the actor responsive too.
+                std::thread::spawn(move || {
+                    let result = session.finish().map_err(|error| error.to_string());
+                    let _ = sender.send(Message::Reaped { id, launch, result });
                 });
+            } else {
+                if let Some(process) = &mut entry.process {
+                    process.cleaned(now);
+                }
+                self.complete_stop(id);
             }
         }
     }
@@ -706,6 +1254,57 @@ mod tests {
         }
     }
     #[test]
+    fn recovery_pauses_due_retries_without_dropping_them() {
+        let (sender, _) = mpsc::channel();
+        let (events, receiver) = async_channel::unbounded();
+        let mut actor = Actor::new(PathBuf::new(), None, sender, events);
+        actor.config = config::parse(
+            "[[projects]]\nid='p'\nname='P'\npath='/tmp'\n[[projects.processes]]\nid='worker'\nname='Worker'\ncommand='exit 1'\nrestart={policy='on-failure',max_retries=5}",
+            &PathBuf::from("/tmp"),
+        ).unwrap();
+        actor.sync_processes();
+        while receiver.try_recv().is_ok() {}
+        let process = actor
+            .entries
+            .get_mut(&SessionId(1))
+            .unwrap()
+            .process
+            .as_mut()
+            .unwrap();
+        process.start(true);
+        process.spawn_failed("failed".into(), Duration::ZERO);
+        actor.clock = Box::new(FakeClock(Duration::from_secs(2)));
+        actor.recovery_pending = true;
+        actor.timers();
+        assert!(receiver.is_empty());
+        assert_eq!(
+            actor.entries[&SessionId(1)]
+                .process
+                .as_ref()
+                .unwrap()
+                .retry_at,
+            Some(Duration::from_secs(1))
+        );
+    }
+    #[test]
+    fn configured_stop_respects_grace_and_three_second_escalation() {
+        let config = config::parse(
+            "[[projects]]\nid='p'\nname='P'\npath='/tmp'\n[[projects.processes]]\nid='p'\nname='P'\ncommand='sleep 10'\nstop_timeout_secs=1",
+            &PathBuf::from("/tmp"),
+        ).unwrap();
+        let mut clock = FakeClock(Duration::from_secs(10));
+        let mut stop = StopPlan::for_process(clock.now(), &config.projects[0].processes[0]);
+        assert_eq!(stop.due_signal(clock.now()), Some(libc::SIGINT));
+        clock.0 += Duration::from_millis(999);
+        assert_eq!(stop.due_signal(clock.now()), None);
+        clock.0 += Duration::from_millis(1);
+        assert_eq!(stop.due_signal(clock.now()), Some(libc::SIGTERM));
+        clock.0 += Duration::from_millis(2999);
+        assert_eq!(stop.due_signal(clock.now()), None);
+        clock.0 += Duration::from_millis(1);
+        assert_eq!(stop.due_signal(clock.now()), Some(libc::SIGKILL));
+    }
+    #[test]
     fn escalation_uses_deadlines_and_stale_lifecycle_is_ignored() {
         let mut clock = FakeClock(Duration::ZERO);
         let mut stop = StopPlan::new(clock.now());
@@ -722,7 +1321,13 @@ mod tests {
         actor.entries.insert(
             SessionId(1),
             Entry {
+                process: None,
+                desired: None,
+                history: None,
+                joining: false,
                 info: SessionInfo {
+                    process: None,
+                    config_changed: false,
                     pid: None,
                     id: SessionId(1),
                     launch: LaunchId(2),

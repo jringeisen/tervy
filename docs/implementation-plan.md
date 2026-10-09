@@ -1,6 +1,6 @@
 # DevDesk — Implementation Plan
 
-Status: **Approved; implementing milestones with owner review.** M0–M2 are approved; M3 has not started.
+Status: **Approved; implementing milestones with owner review.** M0–M3 are owner approved; M4 is next.
 
 Sizing: **S** ≈ under a day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks of focused, Claude-assisted work with owner review. These are relative sizes for ordering and risk, not commitments.
 
@@ -162,6 +162,8 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 **Tests:** state machine unit tests covering every transition in the diagram (fake clock); restart/backoff tests; integration test with a script that traps SIGINT and exits slowly (verify escalation timing); PID-reuse guard test.
 
 ---
+
+**M3 implementation review (2026-10-08):** 🧪 Tasks 3.1–3.6 and lifecycle/recovery tests are implemented; [M3 review](m3-review.md) records coverage and the remaining owner acceptance. The owner's ai-crm commands are configured for manual start. 🧪 Owner confirmed the process-tab fix and requested committing M3, then continuing to M4. Recorded performance limitations remain open.
 
 ## M4 — Claude agents, persistence, restore (L)
 

@@ -45,9 +45,21 @@ impl TerminalSession {
     /// The observer receives only two lifecycle transitions, never output or
     /// wakeups. It must send nonblocking messages and never lock the grid.
     pub fn spawn_observed(
+        spec: SpawnSpec,
+        size: Dimensions,
+        observer: Option<crate::terminal::LifecycleObserver>,
+    ) -> io::Result<(Self, TerminalEvents)> {
+        Self::spawn_reusing(spec, size, observer, None, "")
+    }
+
+    /// Reattach only after the old session is empty and finish() joined its
+    /// reader. Each instance gets fresh event/input routing; only Term persists.
+    pub fn spawn_reusing(
         mut spec: SpawnSpec,
         size: Dimensions,
         observer: Option<crate::terminal::LifecycleObserver>,
+        history: Option<TerminalHandle>,
+        separator: &str,
     ) -> io::Result<(Self, TerminalEvents)> {
         if size.columns < 2 || size.rows < 2 {
             return Err(io::Error::new(
@@ -72,16 +84,26 @@ impl TerminalSession {
         if let Some(observer) = observer {
             proxy.set_lifecycle(observer);
         }
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config {
-                scrolling_history: spec.scrollback_lines,
-                kitty_keyboard: true,
-                osc52: Osc52::OnlyCopy,
-                ..Config::default()
-            },
-            &size,
-            proxy.clone(),
-        )));
+        let term = if let Some(history) = history {
+            let term = history.term;
+            {
+                let mut grid = term.lock();
+                grid.replace_event_proxy(proxy.clone());
+                crate::restart::prepare(&mut grid, separator);
+            }
+            term
+        } else {
+            Arc::new(FairMutex::new(Term::new(
+                Config {
+                    scrolling_history: spec.scrollback_lines,
+                    kitty_keyboard: true,
+                    osc52: Osc52::OnlyCopy,
+                    ..Config::default()
+                },
+                &size,
+                proxy.clone(),
+            )))
+        };
         let event_loop = EventLoop::new(term.clone(), proxy.clone(), pty, true, false)?;
         let input = event_loop.channel();
         proxy.set_input(input.clone());
@@ -111,6 +133,18 @@ impl TerminalSession {
         self.master
             .as_ref()
             .and_then(|master| self.owned.foreground_job(master))
+    }
+
+    /// Worker-only handoff. The caller has verified an empty session and final
+    /// Exit. Joining here prevents two parsers from ever sharing a process grid.
+    pub fn finish(mut self) -> io::Result<TerminalHandle> {
+        if let Some(reader) = self.reader.take() {
+            reader
+                .join()
+                .map_err(|_| io::Error::other("PTY reader panicked"))?;
+        }
+        self.master.take();
+        Ok(self.handle.clone())
     }
 }
 

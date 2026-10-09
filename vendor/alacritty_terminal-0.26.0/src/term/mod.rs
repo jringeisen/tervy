@@ -715,6 +715,12 @@ impl<T> Term<T> {
         &self.mode
     }
 
+    /// DevDesk: replace instance routing after joining the previous PTY reader.
+    /// The embedding application holds the Term lock; grid/history are retained.
+    pub fn replace_event_proxy(&mut self, event_proxy: T) {
+        self.event_proxy = event_proxy;
+    }
+
     /// Swap primary and alternate screen buffer.
     pub fn swap_alt(&mut self) {
         if !self.mode.contains(TermMode::ALT_SCREEN) {

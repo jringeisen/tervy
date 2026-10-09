@@ -39,6 +39,9 @@ gpui_kit::actions!(
 struct ShellTab {
     info: SessionInfo,
     view: Entity<TerminalView>,
+    /// A dismissed process tab retains its view/history and sidebar identity.
+    /// Shell tabs are removed by the supervisor after their session stops.
+    open: bool,
 }
 #[derive(Clone)]
 enum PaletteAction {
@@ -47,6 +50,12 @@ enum PaletteAction {
     Close,
     Rename,
     Add,
+    Start(SessionId),
+    Stop(SessionId),
+    Restart(SessionId),
+    StartAll(String),
+    StopAll(String),
+    Recover,
 }
 
 pub struct Workspace {
@@ -161,12 +170,36 @@ impl Workspace {
     fn project_tabs(&self) -> Vec<SessionId> {
         self.tabs
             .iter()
-            .filter(|(_, tab)| Some(&tab.info.project) == self.active_project.as_ref())
+            .filter(|(_, tab)| tab.open && Some(&tab.info.project) == self.active_project.as_ref())
             .map(|(id, _)| *id)
             .collect()
     }
     fn event(&mut self, event: CoreEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            CoreEvent::Orphans(orphans) => {
+                let summary = orphans
+                    .iter()
+                    .map(|orphan| {
+                        format!("{}: {} surviving processes", orphan.owner, orphan.members)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let answer = window.prompt(
+                    PromptLevel::Warning,
+                    "Processes from the previous DevDesk run are still running",
+                    Some(&summary),
+                    &["Leave running", "Stop previous processes"],
+                    cx,
+                );
+                self._tasks.push(cx.spawn(async move |view, cx| {
+                    if let Ok(answer) = answer.await {
+                        let _ = view.update(cx, |this, _| {
+                            this.core
+                                .send(CoreCommand::ResolveOrphans { kill: answer == 1 })
+                        });
+                    }
+                }));
+            }
             CoreEvent::Config(config) => {
                 self.error = None;
                 let mut projects = config.projects.clone();
@@ -209,9 +242,19 @@ impl Workspace {
                             &self.config.settings,
                         )
                     });
+                    view.update(cx, |view, cx| view.set_status(&info.status, cx));
                     let id = info.id;
-                    self.selected.insert(info.project.clone(), id);
-                    self.tabs.insert(id, ShellTab { info, view });
+                    if info.process.is_none() {
+                        self.selected.insert(info.project.clone(), id);
+                    }
+                    self.tabs.insert(
+                        id,
+                        ShellTab {
+                            info,
+                            view,
+                            open: true,
+                        },
+                    );
                     self.update_visibility(window, cx);
                 }
             }
@@ -245,11 +288,9 @@ impl Workspace {
                 if let Some(tab) = self.tabs.remove(&id)
                     && self.selected.get(&tab.info.project) == Some(&id)
                 {
-                    if let Some((&next, _)) = self
-                        .tabs
-                        .iter()
-                        .find(|(_, candidate)| candidate.info.project == tab.info.project)
-                    {
+                    if let Some((&next, _)) = self.tabs.iter().find(|(_, candidate)| {
+                        candidate.open && candidate.info.project == tab.info.project
+                    }) {
                         self.selected.insert(tab.info.project, next);
                     } else {
                         self.selected.remove(&tab.info.project);
@@ -462,8 +503,12 @@ impl Workspace {
         let started = std::env::var_os("DEVDESK_PERF_SWITCH").map(|_| std::time::Instant::now());
         self.expanded.insert(project.clone());
         self.active_project = Some(project.clone());
+        self.core.send(CoreCommand::ProjectOpened(project.clone()));
         if self.ready
-            && !self.tabs.values().any(|tab| tab.info.project == project)
+            && !self
+                .tabs
+                .values()
+                .any(|tab| tab.info.project == project && tab.info.process.is_none())
             && !self.pending.contains(&project)
         {
             self.pending.insert(project.clone());
@@ -484,7 +529,8 @@ impl Workspace {
         }
     }
     fn choose_tab(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(tab) = self.tabs.get(&id) {
+        if let Some(tab) = self.tabs.get_mut(&id) {
+            tab.open = true;
             self.active_project = Some(tab.info.project.clone());
             self.selected.insert(tab.info.project.clone(), id);
             self.update_visibility(window, cx);
@@ -530,11 +576,38 @@ impl Workspace {
             return;
         }
         if let Some(id) = self.active() {
-            self.core.send(CoreCommand::Close {
-                id,
-                confirmed: None,
-            });
+            self.close_tab(id, window, cx);
         }
+    }
+    fn close_tab(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        self.core.send(CoreCommand::Close {
+            id,
+            confirmed: None,
+        });
+        let Some(tab) = self.tabs.get_mut(&id) else {
+            return;
+        };
+        if tab.info.process.is_none() {
+            // Shells stay visible until any foreground-job confirmation and
+            // session cleanup complete. Processes keep a permanent core entry.
+            return;
+        }
+        tab.open = false;
+        let project = tab.info.project.clone();
+        if self.selected.get(&project) == Some(&id) {
+            let next = self
+                .tabs
+                .iter()
+                .find(|(_, candidate)| candidate.open && candidate.info.project == project)
+                .map(|(id, _)| *id);
+            if let Some(next) = next {
+                self.selected.insert(project, next);
+            } else {
+                self.selected.remove(&project);
+            }
+        }
+        self.update_visibility(window, cx);
+        cx.notify();
     }
     fn add_project(&mut self, _: &AddProject, _: &mut Window, cx: &mut Context<Self>) {
         let answer = cx.prompt_for_paths(PathPromptOptions {
@@ -613,6 +686,30 @@ impl Workspace {
                 PaletteAction::Project(project.id.clone()),
             )
         }));
+        if let Some(project) = &self.active_project {
+            actions.push((
+                "Start All Processes".into(),
+                PaletteAction::StartAll(project.clone()),
+            ));
+            actions.push((
+                "Stop All Processes".into(),
+                PaletteAction::StopAll(project.clone()),
+            ));
+            for (id, tab) in &self.tabs {
+                if tab.info.project == *project && tab.info.process.is_some() {
+                    actions.push((
+                        format!("Start {}", tab.info.name),
+                        PaletteAction::Start(*id),
+                    ));
+                    actions.push((format!("Stop {}", tab.info.name), PaletteAction::Stop(*id)));
+                    actions.push((
+                        format!("Restart {}", tab.info.name),
+                        PaletteAction::Restart(*id),
+                    ));
+                }
+            }
+        }
+        actions.push(("Recover Previous Sessions…".into(), PaletteAction::Recover));
         actions
             .into_iter()
             .filter(|(label, _)| fuzzy_match(label, &self.palette_query))
@@ -631,6 +728,12 @@ impl Workspace {
             PaletteAction::Close => self.close_terminal(&CloseTerminal, window, cx),
             PaletteAction::Rename => self.rename_terminal(&RenameTerminal, window, cx),
             PaletteAction::Add => self.add_project(&AddProject, window, cx),
+            PaletteAction::Start(id) => self.core.send(CoreCommand::Start(id)),
+            PaletteAction::Stop(id) => self.core.send(CoreCommand::Stop(id)),
+            PaletteAction::Restart(id) => self.core.send(CoreCommand::Restart(id)),
+            PaletteAction::StartAll(project) => self.core.send(CoreCommand::StartAll(project)),
+            PaletteAction::StopAll(project) => self.core.send(CoreCommand::StopAll(project)),
+            PaletteAction::Recover => self.core.send(CoreCommand::ShowOrphans),
         }
         if self.rename.is_none() {
             self.restore_focus(window, cx);
@@ -759,6 +862,82 @@ impl Render for Workspace {
                         continue;
                     }
                     let id = *id;
+                    if tab.info.process.is_some() {
+                        let running = matches!(
+                            tab.info.status,
+                            SessionStatus::Starting
+                                | SessionStatus::Running
+                                | SessionStatus::Stopping
+                        );
+                        let failed = matches!(tab.info.status, SessionStatus::Failed(_));
+                        let status = match &tab.info.status {
+                            SessionStatus::Failed(reason) => reason.clone(),
+                            SessionStatus::Stopped => "Stopped".into(),
+                            SessionStatus::Starting => "Starting".into(),
+                            SessionStatus::Running => "Running".into(),
+                            SessionStatus::Stopping => "Stopping".into(),
+                            SessionStatus::Exited { .. } => "Exited".into(),
+                        };
+                        sidebar = sidebar.child(
+                            v_flex()
+                                .pl_3()
+                                .gap_1()
+                                .child(
+                                    h_flex()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .id(("process", id.0))
+                                                .flex_1()
+                                                .cursor_pointer()
+                                                .text_sm()
+                                                .when(failed, |div| div.text_color(theme.danger))
+                                                .child(format!(
+                                                    "{} {}",
+                                                    dot(&tab.info.status),
+                                                    tab.info.name
+                                                ))
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.choose_tab(id, window, cx)
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("process-toggle", id.0))
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .child(if running { "Stop" } else { "Start" })
+                                                .on_click(cx.listener(move |this, _, _, _| {
+                                                    this.core.send(if running {
+                                                        CoreCommand::Stop(id)
+                                                    } else {
+                                                        CoreCommand::Start(id)
+                                                    })
+                                                })),
+                                        )
+                                        .child(
+                                            div()
+                                                .id(("process-restart", id.0))
+                                                .cursor_pointer()
+                                                .text_xs()
+                                                .child("↻")
+                                                .on_click(cx.listener(move |this, _, _, _| {
+                                                    this.core.send(CoreCommand::Restart(id))
+                                                })),
+                                        ),
+                                )
+                                .child(div().text_xs().text_color(muted).child(
+                                    if tab.info.config_changed {
+                                        format!("{status} · config changed — restart to apply")
+                                    } else {
+                                        status
+                                    },
+                                )),
+                        );
+                        continue;
+                    }
                     sidebar = sidebar.child(
                         div()
                             .id(("shell", id.0))
@@ -803,12 +982,9 @@ impl Render for Workspace {
                             .px_1()
                             .cursor_pointer()
                             .child("×")
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.core.send(CoreCommand::Close {
-                                    id,
-                                    confirmed: None,
-                                });
+                                this.close_tab(id, window, cx);
                             })),
                     ),
             );

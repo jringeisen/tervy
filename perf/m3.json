@@ -1,0 +1,401 @@
+{
+  "recorded": "2026-10-08",
+  "evidence": "🧪 M3 implementation probes; owner review pending",
+  "machine": {
+    "model": "MacBook Pro",
+    "model_identifier": "Mac14,6",
+    "chip": "Apple M2 Max",
+    "cpu_cores": 12,
+    "memory_gb": 96,
+    "architecture": "arm64",
+    "macos": "27.0.1",
+    "macos_build": "26A434"
+  },
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28), Xcode 27.0 (27A266a) already installed; cargo-deny 0.20.2; gpui-kit =0.7.1 / gpui-pre =0.3.8 with runtime_shaders",
+  "normal_startup": {
+    "runs": 10,
+    "samples_ms": [
+      719.8,
+      190.2,
+      194.6,
+      187.6,
+      182.9,
+      194.1,
+      180.6,
+      189.7,
+      180.8,
+      188.2
+    ],
+    "p50_ms": 188.95,
+    "p95_ms": 719.8,
+    "first_after_build_ms": 719.8
+  },
+  "normal_startup_method": "release startup.sh 10 with isolated DEVDESK_HOME, normal config + SQLite + single-instance path; first-frame exit. No OS/Metal cache flush.",
+  "comparable_terminal_startup": {
+    "runs": 10,
+    "samples_ms": [
+      577.2,
+      199.9,
+      231.7,
+      253.8,
+      256.7,
+      250.5,
+      239.5,
+      265.7,
+      254.6,
+      223.9
+    ],
+    "p50_ms": 252.15,
+    "p95_ms": 577.2,
+    "first_after_build_ms": 577.2
+  },
+  "comparable_method": "DEVDESK_PERF_LAYOUT=terminal startup.sh release 10, in-memory config, comparable layout to M2.",
+  "echo": {
+    "scenario": "echo",
+    "managed_children": {
+      "samples": [
+        {
+          "at_s": 0.048,
+          "count": 0,
+          "footprint_sum_mb": 0.0,
+          "agent_present": false,
+          "commands": []
+        },
+        {
+          "at_s": 0.313,
+          "count": 1,
+          "footprint_sum_mb": 3.67,
+          "agent_present": false,
+          "commands": [
+            "/bin/zsh"
+          ]
+        },
+        {
+          "at_s": 0.573,
+          "count": 2,
+          "footprint_sum_mb": 6.128,
+          "agent_present": false,
+          "commands": [
+            "/bin/zsh",
+            "/bin/zsh"
+          ]
+        },
+        {
+          "at_s": 0.83,
+          "count": 1,
+          "footprint_sum_mb": 4.228,
+          "agent_present": false,
+          "commands": [
+            "/bin/zsh"
+          ]
+        },
+        {
+          "at_s": 1.091,
+          "count": 1,
+          "footprint_sum_mb": 5.096,
+          "agent_present": false,
+          "commands": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+          ]
+        },
+        {
+          "at_s": 1.359,
+          "count": 1,
+          "footprint_sum_mb": 5.096,
+          "agent_present": false,
+          "commands": [
+            "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+          ]
+        }
+      ],
+      "note": "external snapshots; sums are distinct from DevDesk"
+    },
+    "agent_cli_processes": {
+      "samples": [],
+      "peak_sampled_footprint_sum_mb": 0
+    },
+    "exit_code": 0,
+    "measurements": [
+      {
+        "scenario": "echo",
+        "first_content_frame_ms": 797.625,
+        "pty_spawn_to_first_content_frame_ms": 30.323
+      },
+      {
+        "scenario": "echo",
+        "gpui_key_to_painted_echo_ms": [
+          7.982333,
+          8.096833,
+          7.150625,
+          6.532375,
+          6.961958,
+          5.676791,
+          4.527083,
+          5.770667,
+          5.335833,
+          4.996458,
+          3.3689169999999997,
+          3.4187089999999998,
+          2.489167,
+          3.725333,
+          2.094792,
+          1.6897920000000002,
+          1.165959,
+          8.535708,
+          8.979083000000001,
+          8.148792
+        ],
+        "gpui_key_to_pty_write_ms": [
+          0.032875,
+          0.021416,
+          0.022459,
+          0.023333,
+          0.019958,
+          0.017333,
+          0.035540999999999996,
+          0.0205,
+          0.024624999999999998,
+          0.027583,
+          0.027583999999999997,
+          0.022042,
+          0.020292,
+          0.02,
+          0.019167,
+          0.017625000000000002,
+          0.017625000000000002,
+          0.019291,
+          0.023542,
+          0.0255
+        ]
+      }
+    ],
+    "peak_sampled_footprint_mb": 79.087,
+    "footprint_samples": [
+      {
+        "at_s": 0.0,
+        "footprint_mb": 0.18
+      },
+      {
+        "at_s": 0.099,
+        "footprint_mb": 13.649
+      },
+      {
+        "at_s": 0.154,
+        "footprint_mb": 21.71
+      },
+      {
+        "at_s": 0.209,
+        "footprint_mb": 56.395
+      },
+      {
+        "at_s": 0.263,
+        "footprint_mb": 72.648
+      },
+      {
+        "at_s": 0.365,
+        "footprint_mb": 73.975
+      },
+      {
+        "at_s": 0.417,
+        "footprint_mb": 73.991
+      },
+      {
+        "at_s": 0.47,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.523,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.624,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.675,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.726,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.781,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.883,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.935,
+        "footprint_mb": 74.024
+      },
+      {
+        "at_s": 0.987,
+        "footprint_mb": 78.595
+      },
+      {
+        "at_s": 1.042,
+        "footprint_mb": 78.956
+      },
+      {
+        "at_s": 1.145,
+        "footprint_mb": 79.07
+      },
+      {
+        "at_s": 1.196,
+        "footprint_mb": 79.087
+      },
+      {
+        "at_s": 1.252,
+        "footprint_mb": 79.087
+      },
+      {
+        "at_s": 1.306,
+        "footprint_mb": 79.087
+      }
+    ],
+    "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+  },
+  "echo_p95_ms": 8.535708,
+  "stress_trials": [
+    {
+      "evidence": "🧪 visible macOS release UI; synthetic GPUI input; no model prompts",
+      "exit_code": 0,
+      "failure": null,
+      "measurements": [
+        {
+          "sessions": 11,
+          "noisy_terminals": 10,
+          "palette_frame_ms": -1.0,
+          "fuzzy_matches": 0,
+          "visible": 3,
+          "frame_samples": 0,
+          "frame_p95_ms": 0.0,
+          "frame_max_ms": 0.0,
+          "echo_samples_ms": [],
+          "switch_samples_ms": [],
+          "echo_p95_ms": 0.0,
+          "shutdown_ms": 111.251,
+          "clean_shutdown": true,
+          "sids": [
+            54035,
+            54034,
+            54036,
+            54037,
+            54038,
+            54039,
+            54040,
+            54041,
+            54042,
+            54043,
+            54044
+          ]
+        }
+      ],
+      "sessions": [
+        {
+          "sid": 54035,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54034,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54036,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54037,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54038,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54039,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54040,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54041,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54042,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54043,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 54044,
+          "survivors_after_app_exit": 0
+        }
+      ],
+      "note": "Ten yes producers, one raw echo child, three visible panes, ten project switches. Frame callbacks measure GPUI frame scheduling, excluding compositor scanout. Separate managed-child trees; no agent CLI."
+    },
+    {
+      "evidence": "🧪 visible macOS release UI; synthetic GPUI input; no model prompts",
+      "exit_code": -9,
+      "failure": "ten-session probe exceeded 30 s",
+      "measurements": [],
+      "sessions": [
+        {
+          "sid": 59888,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59889,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59890,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59891,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59892,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59893,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59894,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59895,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59896,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59898,
+          "survivors_after_app_exit": 0
+        },
+        {
+          "sid": 59899,
+          "survivors_after_app_exit": 0
+        }
+      ],
+      "note": "Ten yes producers, one raw echo child, three visible panes, ten project switches. Frame callbacks measure GPUI frame scheduling, excluding compositor scanout. Separate managed-child trees; no agent CLI."
+    }
+  ],
+  "status": "Startup median under 500ms and echo under 16.7ms; first launches exceed 500ms. Comparable startup median regressed from M2 164.35ms to 252.2ms (~53.5%); cause unverified. Both stress trials failed frame coverage; no stress performance pass claimed. All 22 traced sessions verified empty after cleanup. Sampled main thread waits in AppKit and supervisor waits for messages; window/display condition suspected, not proven. Visible-window stress rerun pending.",
+  "limits": "Measured during M3 implementation, before final recovery-timer regression test. No idle rebaseline; M2 baseline retained. No real model calls or application jobs. Physical keyboard and compositor scanout excluded from echo timings. A11 remains unresolved."
+}

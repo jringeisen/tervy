@@ -182,5 +182,5 @@ Estimate: a daemon is an L-sized project, not a transport swap. No change now (i
 - ✅ vte has no DECSTR (`ESC[!p`) handler, so it would be silently ignored.
 - ✅ RIS (`Term::reset_state`) calls `grid.reset()`, which would wipe the history this ADR exists to keep.
 
-DevDesk instead calls `Term`'s public `Handler` methods directly: leave the alternate screen, reset the keyboard-mode stack, disable mouse/focus/bracketed-paste modes, reset cursor style and scroll region. ❓ The exact method set is verified in M3 task 3.2b with a test: a crashed TUI in the alt screen with mouse + kitty modes → restart → history intact and modes default.
+DevDesk instead calls `Term`'s public `Handler` methods directly: leave the alternate screen, reset the keyboard-mode stack, disable mouse/focus/bracketed-paste modes, reset cursor style and scroll region. 🧪 M3 task 3.2b verifies the exact method set with a real-PTY test: a crashed TUI in the alt screen with mouse + kitty modes → restart → history intact and modes default.
 **Consequences:** Crash output stays visible above the restarted run. Scrollback is shared across restarts, within the same cap.

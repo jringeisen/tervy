@@ -552,3 +552,15 @@ FSEvents reports `/private/var` where callers may use `/var`. Activation uses a
 separate private Unix datagram socket and the lifetime `flock`; hook IPC remains
 M4. The stress-only three-pane view exercises ten output producers and a quiet
 input pane without introducing production split controls. See [M2 review](m2-review.md).
+
+
+M3 implementation evidence (🧪, replacement machine): configured-process policy
+is in `core::process`; the actor owns every PTY and the sole SQLite connection.
+The launch-time ProcessSpec remains immutable while a separate desired spec
+tracks hot reload. Unexpected leader exit stays Stopping until the entire owned
+session is empty, its output has drained, and a worker has joined its reader.
+The worker then hands back the retained grid; only the next launch may replace
+its event sink, reset modes and attach a new parser. Core never reads Term
+internals. Ledger recovery covers leaderless members and guards birth times;
+manual Leave preserves ownership records and prevents duplicate process starts.
+See [M3 review](m3-review.md) for evidence and remaining owner acceptance.

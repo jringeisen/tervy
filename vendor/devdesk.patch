@@ -65,7 +65,14 @@
              inactive_grid,
              scroll_region,
              event_proxy,
-@@ -1873,7 +1878,24 @@
+@@ -710,0 +716,6 @@
++    }
++
++    /// DevDesk: replace instance routing after joining the previous PTY reader.
++    /// The embedding application holds the Term lock; grid/history are retained.
++    pub fn replace_event_proxy(&mut self, event_proxy: T) {
++        self.event_proxy = event_proxy;
+@@ -1873,7 +1884,24 @@
      #[inline]
      fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
          trace!("Setting hyperlink: {hyperlink:?}");
@@ -91,7 +98,7 @@
      }
  
      /// Set a terminal attribute.
-@@ -2219,6 +2241,8 @@
+@@ -2219,6 +2247,8 @@
  
      #[inline]
      fn set_title(&mut self, title: Option<String>) {

@@ -16,3 +16,4 @@ serde = { version = "1", features = ["derive"] }
 toml = "1.1"
 toml_edit = "0.25"
 notify = "8.2"
+rusqlite = { version = "0.40", features = ["bundled"] }

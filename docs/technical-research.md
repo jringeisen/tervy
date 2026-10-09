@@ -320,6 +320,15 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 
 - 🧪 M2 final numbers: first-frame p50 **164.3 ms**, first/p95 **619.4 ms** (402.8 ms before main); ten noisy terminals frame p95 **9.30 ms**, max switch **10.90 ms**, quiet echo p95 **8.94 ms**, palette **8.29 ms**, shutdown **108.08 ms**, all eleven sessions empty. One stable idle shell uses **70.06 MB / 0.0073% CPU / 0.383 interrupt wakes/s** over 60 seconds after a 10-second settle. Visibility/occlusion is uncontrolled; low CPU in this trial is not an A11 fix. The earlier 84.85 MB / 1.50% trial logged five shell launches and is retained as nonbaseline evidence. Details and regression limits are in the M2 review.
 
+## 10f. M3 process lifecycle and recovery evidence (2026-10-08)
+
+- 🧪 `core::process` owns policy state and monotonic retry times; the supervisor owns PTYs and signals. Configured launches use the cached environment and non-login `$SHELL -c`. Stop escalation uses the current instance's immutable config snapshot. No timer is armed solely for a stopped process; recovery suspends retry scheduling.
+- 🧪 A crashed alternate-screen/mouse/kitty fixture restarts on the same `Arc<Term>`, retains primary and crash text, restores default modes, and answers a cursor query through the new instance's input channel. Direct Handler calls implement ADR-027 without RIS/DECSTR. ✅ Rebinding the pinned Term's private event sink required one attributed public setter in the local Apache-2.0 source; see `vendor/devdesk.patch`.
+- 🧪 Real-PTY integration tests verify leaderless port-holder cleanup before rebinding, history across automatic retries, Stop cancellation, first-open autostart and unchanged running config. A separate supervisor test process is SIGKILLed; relaunch recovers and kills its ledger-tracked surviving child. Stale birth-time records are discarded; existing identity tests reject reused processes.
+- 🧪 Bundled rusqlite 0.40.2 / libsqlite3-sys 0.38.2 pass the license allowlist. Schema version 1 creates the minimal session ledger; WAL/FULL commits precede Running. The actor alone owns the connection. ❓ Actual Horizon/Vite/Laravel review and interactive process input remain pending in [M3 review](m3-review.md); no real application jobs are run by the fixtures.
+
+- 🧪 M3 release results are in `perf/m3.json`: normal first-frame p50 188.9 ms / first-p95 719.8 ms; comparable terminal p50 252.2 ms (+53.5% vs M2), painted echo p95 8.54 ms. Two stress trials failed frame coverage (second timed out); all 22 traced sessions were cleaned. Sampled main thread waited in AppKit, supervisor in channel receive. ❓ Window/display conditions and the startup regression need further validation; no stress pass or A11 resolution is claimed. M2 baseline retained.
+
 ## 11. Library compatibility and licensing
 
 - **Version coupling:** `gpui-component` pins `gpui-pre` exactly, and every GPUI-dependent crate must match that pin. Upgrades happen as one unit ("bump gpui-kit").

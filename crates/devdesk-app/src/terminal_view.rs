@@ -39,7 +39,6 @@ pub struct TerminalView {
     warning: Option<String>,
     status: String,
     exited: bool,
-    exit_status: Option<std::process::ExitStatus>,
     focused: bool,
     active: bool,
     bell: bool,
@@ -82,7 +81,6 @@ impl TerminalView {
             warning: None,
             status: "Starting login shell…".into(),
             exited: false,
-            exit_status: None,
             focused: true,
             active: window.is_window_active(),
             bell: false,
@@ -141,7 +139,6 @@ impl TerminalView {
         self.tasks.clear();
         self.snapshot = None;
         self.preedit.clear();
-        self.exit_status = None;
         self.exited = false;
         self.warning = warning;
         self.status = "Login shell".into();
@@ -161,23 +158,21 @@ impl TerminalView {
     pub fn set_status(&mut self, status: &SessionStatus, cx: &mut Context<Self>) {
         self.exited = matches!(
             status,
-            SessionStatus::Exited { .. } | SessionStatus::Failed(_)
+            SessionStatus::Stopped | SessionStatus::Exited { .. } | SessionStatus::Failed(_)
         );
         self.status = match status {
-            SessionStatus::Starting => "Starting login shell…".into(),
-            SessionStatus::Running => "Login shell".into(),
+            SessionStatus::Stopped => "Stopped — Return to start".into(),
+            SessionStatus::Starting => "Starting…".into(),
+            SessionStatus::Running => "Running".into(),
             SessionStatus::Stopping => "Stopping…".into(),
             SessionStatus::Exited { code } => format!(
                 "Exited with {} — Return to restart",
                 code.map_or_else(|| "signal".into(), |code| code.to_string())
             ),
             SessionStatus::Failed(error) => {
-                format!("Could not start shell: {error} — Return to retry")
+                format!("{error} — Return to retry")
             }
         };
-        if matches!(status, SessionStatus::Starting | SessionStatus::Stopping) {
-            self.exit_status = None;
-        }
         if self.visible {
             cx.notify();
         }
@@ -205,20 +200,8 @@ impl TerminalView {
                 let done = matches!(signal, TerminalSignal::Exit);
                 if view
                     .update(cx, |view, cx| {
-                        match signal {
-                            TerminalSignal::ChildExit(status) => {
-                                view.exit_status = Some(status);
-                                view.status = match status.code() {
-                                    Some(code) => format!("Exited with {code}"),
-                                    None => "Exited by signal".into(),
-                                };
-                            }
-                            TerminalSignal::Exit => {
-                                view.exited = true;
-                                view.status.push_str(" — Return to restart");
-                            }
-                            TerminalSignal::Wakeup => {}
-                        }
+                        // Core owns lifecycle state, including session cleanup after
+                        // leader exit. This stream only coalesces output redraws.
                         if view.visible {
                             cx.notify();
                         }
@@ -604,20 +587,7 @@ impl Render for TerminalView {
             background: rgb_color(theme.background),
             selection: rgb_color(theme.selection),
         };
-        let status = self
-            .exit_status
-            .map(|exit| {
-                let status = match exit.code() {
-                    Some(code) => format!("Exited with {code}"),
-                    None => "Exited by signal".into(),
-                };
-                if self.exited {
-                    format!("{status} — Return to restart")
-                } else {
-                    status
-                }
-            })
-            .unwrap_or_else(|| self.status.clone());
+        let status = self.status.clone();
         let warning = self.warning.as_deref().unwrap_or("");
         v_flex()
             .size_full()
