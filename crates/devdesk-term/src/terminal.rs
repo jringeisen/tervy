@@ -347,6 +347,54 @@ mod fixtures {
     }
 
     #[test]
+    fn light_color_queries_report_the_rendered_foreground_and_background() {
+        let palette = Palette::light();
+        let (proxy, events) = EventProxy::new();
+        let mut term = Term::new(Default::default(), &Dimensions::default(), proxy);
+        let mut parser: Processor = Processor::new();
+        for (query, expected) in [
+            (
+                b"\x1b]10;?\x1b\\".as_slice(),
+                "\x1b]10;rgb:2929/3131/3d3d\x1b\\",
+            ),
+            (
+                b"\x1b]11;?\x1b\\".as_slice(),
+                "\x1b]11;rgb:f8f8/f9f9/fbfb\x1b\\",
+            ),
+        ] {
+            parser.advance(&mut term, query);
+            let Event::ColorRequest(index, format) = events.queries.try_recv().unwrap() else {
+                panic!("expected color query");
+            };
+            assert_eq!(format(palette.indexed(index)), expected);
+        }
+    }
+
+    #[test]
+    fn clear_dark_color_queries_report_the_rendered_foreground_and_background() {
+        let palette = Palette::default();
+        let (proxy, events) = EventProxy::new();
+        let mut term = Term::new(Default::default(), &Dimensions::default(), proxy);
+        let mut parser: Processor = Processor::new();
+        for (query, expected) in [
+            (
+                b"\x1b]10;?\x1b\\".as_slice(),
+                "\x1b]10;rgb:e6e6/e6e6/e6e6\x1b\\",
+            ),
+            (
+                b"\x1b]11;?\x1b\\".as_slice(),
+                "\x1b]11;rgb:2121/2727/3434\x1b\\",
+            ),
+        ] {
+            parser.advance(&mut term, query);
+            let Event::ColorRequest(index, format) = events.queries.try_recv().unwrap() else {
+                panic!("expected color query");
+            };
+            assert_eq!(format(palette.indexed(index)), expected);
+        }
+    }
+
+    #[test]
     fn recorded_agent_startup_queries_and_shift_enter_replay_offline() {
         for fixture in [
             include_str!("../tests/fixtures/claude-startup.json"),
@@ -359,7 +407,14 @@ mod fixtures {
                 cell_width: 8,
                 cell_height: 18,
             };
-            let palette = Palette::default();
+            // Recorded OSC color replies describe the palette at capture
+            // time, independently of the current terminal theme.
+            let palette = Palette {
+                foreground: crate::snapshot::rgb(0xd8dee9),
+                background: crate::snapshot::rgb(0x20242c),
+                selection: crate::snapshot::rgb(0x405674),
+                ..Default::default()
+            };
             for exchange in fixture["exchanges"].as_array().unwrap() {
                 let (proxy, events) = EventProxy::new();
                 let mut term = Term::new(

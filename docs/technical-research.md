@@ -399,6 +399,53 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
   M5/M6 real-provider evidence remains separate; no absent-owner visual review.
 
 
+### Terminal color follow-up (2026-10-09)
+
+🧪 Extracted the installed Terminal.app profile at
+`/System/Applications/Utilities/Terminal.app/Contents/Resources/Initial Settings/Clear Dark.terminal`
+using AppKit NSColor conversion to sRGB. Applied foreground `#e6e6e6`, bold
+foreground `#f0f0f0`, background `#212734`, selection `#334e5e`, and the profile's
+sixteen ANSI colors. The terminal uses this fixed dark palette in either system
+appearance; application chrome continues to follow the system. The source
+profile has 0.95 background alpha and blur; DevDesk uses an opaque background.
+
+🧪 The supplied dark-mode reference screenshot has a soft blue-gray surface
+(dominant decoded RGB around `#212530`). Dark application chrome now uses the
+terminal's `#212734` surface with slightly raised tabs, muted labels and soft
+borders. Colors are applied through the pinned component's `Theme::update`
+after system appearance synchronization, keeping semantic tokens and base
+scrollbar/resize colors synchronized. Initially, light mode retained the component theme.
+
+🧪 Light-mode follow-up: the workspace now uses a coordinated light companion
+palette (`#f8f9fb` background, `#29313d` foreground) with darker ANSI colors.
+Both workspace chrome and existing terminal views follow macOS appearance;
+terminal views observe the global component theme, including hidden tabs, so
+protocol color queries use the current palette without restarting the process.
+Chromatic application RGB colors and the standard 256-color cube are preserved.
+
+🧪 Appearance-switch follow-up: the supplied Codex screenshot shows explicit RGB
+prompt/message backgrounds staying dark after switching to light appearance.
+Neutral truecolor backgrounds within 48 RGB units per channel of the opposite
+palette's surface now retain their relative shade against the current surface.
+This is a rendering heuristic: intentionally contrasting neutral surfaces in
+that range are also adapted. Indexed colors, chromatic RGB, foreground colors
+and inverse video remain exact. Parser regression tests cover both directions
+and returning to the original appearance without changing stored cells.
+
+### Sidebar memory follow-up (2026-10-09)
+
+🧪 Session rows display approximate summed physical footprint from the macOS
+SDK's `proc_pid_rusage` / `rusage_info_v0.ri_phys_footprint` in decimal MB.
+Each batch enumerates processes once, includes live descendants and captured
+background sessions, and checks PID birth identities around memory queries.
+One worker batch can be in flight; the supervisor schedules the next sample
+five seconds after completion and disables sampling when no sessions are live.
+Results carry SessionId and LaunchId; stale launches are discarded. Stopped,
+not-yet-sampled or unavailable sessions show a dash. This accounts for child
+processes, not DevDesk's terminal grids; per-process sums are approximate rather
+than a unique physical-memory total. Native PTY and supervisor tests verify
+child accounting, stale birth rejection and publication of live samples.
+
 ## 11. Library compatibility and licensing
 
 - **Version coupling:** `gpui-component` pins `gpui-pre` exactly, and every GPUI-dependent crate must match that pin. Upgrades happen as one unit ("bump gpui-kit").

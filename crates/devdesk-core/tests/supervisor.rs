@@ -11,6 +11,50 @@ fn next(runtime: &Supervisor, deadline: Instant) -> CoreEvent {
     }
 }
 #[test]
+fn live_shell_publishes_memory_with_its_current_launch_identity() {
+    let directory = std::env::temp_dir().join(format!("devdesk-memory-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("config.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[[projects]]\nid='test'\nname='Memory'\npath='{}'\n",
+            directory.display()
+        ),
+    )
+    .unwrap();
+    let runtime = Supervisor::start(path, None).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !matches!(next(&runtime, deadline), CoreEvent::Config(_)) {}
+    runtime.handle.send(Command::NewShell {
+        project: "test".into(),
+        size: Dimensions::default(),
+    });
+    let info = loop {
+        if let CoreEvent::SessionStarted { info, .. } = next(&runtime, deadline) {
+            break info;
+        }
+    };
+    loop {
+        if let CoreEvent::MemoryUsage(samples) = next(&runtime, deadline)
+            && samples.iter().any(|(id, launch, bytes)| {
+                *id == info.id && *launch == info.launch && bytes.is_some_and(|bytes| bytes > 0)
+            })
+        {
+            break;
+        }
+    }
+    runtime.handle.send(Command::Shutdown);
+    loop {
+        if let CoreEvent::ShutdownComplete { clean } = next(&runtime, deadline) {
+            assert!(clean);
+            break;
+        }
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn ten_busy_shells_shutdown_in_parallel_and_config_reload_keeps_last_good() {
     let directory = std::env::temp_dir().join(format!("devdesk-supervisor-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();

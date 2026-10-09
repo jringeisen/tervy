@@ -8,10 +8,10 @@ mod perf;
 mod terminal_element;
 mod terminal_perf;
 mod terminal_view;
+mod theme;
 mod workspace;
 use crate::workspace::*;
 use devdesk_core::{config, instance::InstanceGuard, supervisor::Supervisor};
-use gpui_kit::component::Theme;
 use gpui_kit::*;
 gpui_kit::actions!(devdesk, [Quit]);
 struct Desktop {
@@ -134,11 +134,9 @@ fn main() {
             ..Default::default()
         };
         let result = gpui_kit::open_window(options, cx, |window, cx| {
-            Theme::sync_system_appearance(Some(window), cx);
+            theme::sync_appearance(window, cx);
             window
-                .observe_window_appearance(|window, cx| {
-                    Theme::sync_system_appearance(Some(window), cx)
-                })
+                .observe_window_appearance(theme::sync_appearance)
                 .detach();
             window.on_window_should_close(cx, |_, cx| {
                 cx.hide();
@@ -177,8 +175,14 @@ fn install_menus_and_keys(cx: &mut App) {
         if let Some(desktop) = cx.try_global::<Desktop>() {
             let view = desktop.workspace.clone();
             let window = desktop.window;
-            let _ = window.update(cx, |_, window, cx| {
-                view.update(cx, |view, cx| view.request_quit(window, cx))
+            // Keyboard/menu dispatch already holds the window lease. Wait
+            // until it is released before entering the confirmation flow.
+            cx.defer(move |cx| {
+                if let Err(error) = window.update(cx, |_, window, cx| {
+                    view.update(cx, |view, cx| view.request_quit(window, cx))
+                }) {
+                    tracing::error!(%error, "failed to request quit");
+                }
             });
         }
     });

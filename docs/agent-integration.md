@@ -244,6 +244,8 @@ So Codex agents show **"Attention"** (BEL seen; cleared by any input in the pane
 
 🧪 Internal title-generation turns also emit notify, with unrelated IDs. Request the documented `tui.terminal_title=["session-id"]`; accept only full notify IDs matching its validated public OSC-title UUID prefix. In 0.162.0 this title truncates to 29 characters plus dots. Core never reconstructs a full ID from that prefix. Source: [exact-version title implementation](https://github.com/openai/codex/blob/rust-v0.162.0/codex-rs/tui/src/chatwidget/status_surfaces.rs). Title customization during a session can reduce status fidelity; unmatched signals are ignored.
 
+🧪 Sidebar follow-up: PTY titles and authenticated notify messages arrive through independent queues. Retain at most eight validated completion UUIDs until the first valid title can correlate them, then persist the matching identity and update the UI. Tests cover completion-before-title, unrelated internal threads, bounded buffering, launch reset, and rejection of a fork's parent identity. A successful side-question action clears any earlier eligibility error; failures now distinguish a non-agent tab, stopped session, launching session, and missing identity.
+
 ### 4.4 Sessions
 
 - **Identity:** no `--session-id` flag 📘. The thread ID arrives with the **first notify matching the visible terminal-title UUID prefix** (end of the first main turn, 🧪 M6). Fallback: the exit summary (`codex resume <id>`) parsed from the pane on exit ✅. Before either arrives, the record has no provider ID: "Ask Question" is disabled and "Resume" uses the picker.

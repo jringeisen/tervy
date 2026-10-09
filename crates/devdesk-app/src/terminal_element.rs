@@ -86,7 +86,10 @@ impl Element for TerminalElement {
                 .ch_advance(font_id, font_size)
                 .unwrap_or(px(8.)),
             height: (window.text_system().ascent(font_id, font_size)
-                + window.text_system().descent(font_id, font_size)
+                // Font metrics use a signed (negative) descent, while a
+                // shaped line's descent is positive. Include its magnitude
+                // so the cell mask leaves room below the text baseline.
+                + window.text_system().descent(font_id, font_size).abs()
                 + px(3.))
             .ceil(),
         };
@@ -295,7 +298,7 @@ fn cell_bounds(
         size(metrics.width * cells as f32, metrics.height),
     )
 }
-fn color(value: Rgb) -> Hsla {
+pub(crate) fn color(value: Rgb) -> Hsla {
     rgb((value.r as u32) << 16 | (value.g as u32) << 8 | value.b as u32).into()
 }
 

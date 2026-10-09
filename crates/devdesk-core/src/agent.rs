@@ -4,7 +4,7 @@ use crate::{env::ShellEnvironment, ipc::HookEvent};
 use devdesk_term::SpawnSpec;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     path::{Path, PathBuf},
 };
 
@@ -59,6 +59,7 @@ pub struct Record {
 #[derive(Clone, Debug)]
 pub enum Request {
     New,
+    Prompt(String),
     Resume,
     ResumePicker,
     Fork {
@@ -88,6 +89,10 @@ pub struct Runtime {
     /// Internal title-generation turns inherit notify, so an authenticated token
     /// alone does not prove that a notification belongs to the visible thread.
     codex_title_prefix: Option<String>,
+    /// PTY titles and authenticated notify messages use independent queues.
+    /// Retain at most eight IDs until the first title can correlate them;
+    /// never retain notification content or infer an ID from a truncated title.
+    codex_pending_ids: VecDeque<String>,
     pub info: Info,
     pub request: Request,
     pub token: String,
@@ -104,6 +109,7 @@ impl Runtime {
     pub fn new(record: Record, request: Request) -> Self {
         Self {
             codex_title_prefix: None,
+            codex_pending_ids: VecDeque::new(),
             info: Info {
                 record,
                 status: Status::Launching,
@@ -119,6 +125,7 @@ impl Runtime {
     }
     pub fn launching(&mut self) {
         self.codex_title_prefix = None;
+        self.codex_pending_ids.clear();
         self.info.status = Status::Launching;
         self.pending.clear();
         self.token = uuid::Uuid::new_v4().to_string();
@@ -127,14 +134,16 @@ impl Runtime {
         self.before_attention = None;
     }
     pub fn exited(&mut self) {
+        self.codex_pending_ids.clear();
         self.info.status = Status::Exited;
         self.pending.clear();
         self.decay_at = None;
         self.before_attention = None;
     }
-    pub fn observe_title(&mut self, title: &str) {
-        if self.info.record.provider != Provider::Codex {
-            return;
+    /// Returns true when a queued completion is authenticated by this title.
+    pub fn observe_title(&mut self, title: &str) -> bool {
+        if self.info.record.provider != Provider::Codex || self.info.status == Status::Exited {
+            return false;
         }
         let prefix: String = title
             .chars()
@@ -149,8 +158,25 @@ impl Runtime {
                 }
             })
         {
+            let pending = self
+                .codex_pending_ids
+                .iter()
+                .find(|id| id.starts_with(&prefix))
+                .cloned();
+            self.codex_pending_ids.clear();
             self.codex_title_prefix = Some(prefix);
+            if let Some(id) = pending {
+                self.codex_completed(id);
+                return true;
+            }
         }
+        false
+    }
+    fn codex_completed(&mut self, id: String) {
+        self.info.record.session_id = Some(id);
+        self.info.status = Status::Idle;
+        self.decay_at = None;
+        self.before_attention = None;
     }
     pub fn input(&mut self, enter: bool, now: std::time::Duration) {
         if self.info.record.provider != Provider::Codex || self.info.status == Status::Exited {
@@ -187,19 +213,20 @@ impl Runtime {
         }
         if self.info.record.provider == Provider::Codex {
             if event.event == "agent-turn-complete"
-                && event.session_id.as_ref().is_some_and(|id| {
-                    self.codex_title_prefix
-                        .as_ref()
-                        .is_some_and(|prefix| id.starts_with(prefix))
-                })
-                && !matches!(&self.request, Request::Fork { parent_session_id, .. } if event.session_id.as_ref() == Some(parent_session_id))
+                && let Some(id) = &event.session_id
+                && uuid::Uuid::parse_str(id).is_ok()
+                && !matches!(&self.request, Request::Fork { parent_session_id, .. } if id == parent_session_id)
             {
-                if let Some(id) = &event.session_id {
-                    self.info.record.session_id = Some(id.clone());
+                if let Some(prefix) = &self.codex_title_prefix {
+                    if id.starts_with(prefix) {
+                        self.codex_completed(id.clone());
+                    }
+                } else if !self.codex_pending_ids.contains(id) {
+                    if self.codex_pending_ids.len() == 8 {
+                        self.codex_pending_ids.pop_front();
+                    }
+                    self.codex_pending_ids.push_back(id.clone());
                 }
-                self.info.status = Status::Idle;
-                self.decay_at = None;
-                self.before_attention = None;
             }
             return;
         }
@@ -332,7 +359,7 @@ impl AgentProvider for ClaudeProvider {
             return Err("A fork must persist the read-only Side role".into());
         }
         let mut args = match c.request {
-            Request::New => vec![
+            Request::New | Request::Prompt(_) => vec![
                 "--session-id".into(),
                 c.record
                     .session_id
@@ -367,6 +394,9 @@ impl AgentProvider for ClaudeProvider {
         }
         if let Request::Fork { question, .. } = c.request {
             args.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: {question}"));
+        }
+        if let Request::Prompt(prompt) = c.request {
+            args.push(prompt.clone());
         }
         let mut variables = hook_environment(c, env);
         variables.insert("CLAUDE_CODE_NONBLOCKING_STDOUT".into(), "1".into());
@@ -542,7 +572,7 @@ mod tests {
                 ],
                 Request::Resume => vec!["--resume", record.session_id.as_deref().unwrap()],
                 Request::ResumePicker => vec!["--resume"],
-                Request::Fork { .. } => unreachable!(),
+                Request::Fork { .. } | Request::Prompt(_) => unreachable!(),
             };
             expected.push("--settings");
             assert_eq!(spec.args[..spec.args.len() - 1], expected);
@@ -571,6 +601,34 @@ mod tests {
             assert_eq!(spec.env["DEVDESK_LAUNCH_ID"], "8");
             assert_eq!(spec.env["CLAUDE_CODE_NONBLOCKING_STDOUT"], "1");
         }
+        let prompt = Request::Prompt("Make the font larger\nWrite proposal.toml".into());
+        let context = Context {
+            record: &record,
+            request: &prompt,
+            launch: 8,
+            token: "test-token",
+            socket: Path::new("/tmp/devdesk.sock"),
+            helper: Path::new("/tmp/devdesk"),
+            lines: 5000,
+        };
+        let spec = ClaudeProvider.build_launch(&context, &environment).unwrap();
+        assert_eq!(
+            spec.args.last().unwrap(),
+            "Make the font larger\nWrite proposal.toml"
+        );
+        let mut side = record.clone();
+        side.role = Role::Side;
+        assert!(
+            ClaudeProvider
+                .build_launch(
+                    &Context {
+                        record: &side,
+                        ..context
+                    },
+                    &environment
+                )
+                .is_err()
+        );
         record.role = Role::Side;
         for request in [Request::New, Request::ResumePicker] {
             assert!(
@@ -775,5 +833,62 @@ mod tests {
         runtime.exited();
         runtime.apply(&event("PermissionRequest", None));
         assert_eq!(runtime.info.status, Status::Exited);
+    }
+    #[test]
+    fn codex_notify_before_title_is_correlated_without_accepting_internal_threads() {
+        let mut record = record();
+        record.provider = Provider::Codex;
+        record.session_id = None;
+        let mut runtime = Runtime::new(record, Request::New);
+        let visible = "20000000-0000-4000-8000-000000000002";
+        let internal = "30000000-0000-4000-8000-000000000003";
+        for id in [visible, internal] {
+            runtime.apply(&HookEvent {
+                session_id: Some(id.into()),
+                ..event("agent-turn-complete", None)
+            });
+        }
+        assert!(runtime.info.record.session_id.is_none());
+        assert!(!runtime.observe_title("invalid title"));
+        assert!(runtime.observe_title("20000000-0000-4000-8000-0000000..."));
+        assert_eq!(runtime.info.record.session_id.as_deref(), Some(visible));
+        assert_eq!(runtime.info.status, Status::Idle);
+        runtime.apply(&HookEvent {
+            session_id: Some(internal.into()),
+            ..event("agent-turn-complete", None)
+        });
+        assert_eq!(runtime.info.record.session_id.as_deref(), Some(visible));
+        runtime.launching();
+        assert!(runtime.codex_pending_ids.is_empty());
+    }
+
+    #[test]
+    fn codex_pending_ids_are_bounded_and_parent_identity_is_never_accepted() {
+        let mut record = record();
+        record.provider = Provider::Codex;
+        record.session_id = None;
+        let parent = "20000000-0000-4000-8000-000000000002";
+        let mut runtime = Runtime::new(
+            record,
+            Request::Fork {
+                parent_session_id: parent.into(),
+                question: "synthetic".into(),
+            },
+        );
+        runtime.apply(&HookEvent {
+            session_id: Some(parent.into()),
+            ..event("agent-turn-complete", None)
+        });
+        assert!(runtime.codex_pending_ids.is_empty());
+        for _ in 0..20 {
+            runtime.apply(&HookEvent {
+                session_id: Some(uuid::Uuid::new_v4().to_string()),
+                ..event("agent-turn-complete", None)
+            });
+        }
+        assert_eq!(runtime.codex_pending_ids.len(), 8);
+        runtime.exited();
+        assert!(!runtime.observe_title("20000000-0000-4000-8000-0000000..."));
+        assert!(runtime.info.record.session_id.is_none());
     }
 }

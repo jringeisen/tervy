@@ -1,5 +1,7 @@
 //! UI mirror of the supervisor. All terminal entities remain alive across tab
 //! and project switches; only selected entities are attached to the render tree.
+mod customization_smoke;
+mod process_form;
 mod side_smoke;
 use crate::terminal_view::TerminalView;
 use devdesk_core::config::{Config, Project};
@@ -8,11 +10,13 @@ use devdesk_core::supervisor::{
 };
 use devdesk_core::{agent, layout};
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel};
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Theme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -55,7 +59,11 @@ enum RemovalTarget {
 #[derive(Clone)]
 enum PaletteAction {
     Project(String),
+    Customize(agent::Provider),
+    ReviewCustomization,
+    UndoCustomization,
     New,
+    TerminalPreset(String, String),
     Close,
     Rename,
     Add,
@@ -76,6 +84,7 @@ enum PaletteAction {
     Quit,
     ToggleProject(String),
     ResizeSide(i32),
+    ResizeSidebar(i32),
     OpenUrl(String),
 }
 
@@ -89,6 +98,7 @@ pub struct Workspace {
     config: Config,
     projects: Vec<Project>,
     tabs: BTreeMap<SessionId, ShellTab>,
+    memory: BTreeMap<SessionId, (devdesk_core::supervisor::LaunchId, Option<u64>)>,
     // Session IDs change on restore; presentation order follows saved identities.
     tab_order: Vec<SessionId>,
     active_project: Option<String>,
@@ -103,11 +113,23 @@ pub struct Workspace {
     palette_query: String,
     rename: Option<SessionId>,
     question_parent: Option<SessionId>,
+    customization_provider: Option<agent::Provider>,
+    customization_preview: Option<devdesk_core::customization::Preview>,
+    customization_notice: Option<String>,
     /// Only the UI owns split presentation; each PTY remains actor-owned.
+    /// UI-owned divider state survives renders; actor storage receives only the
+    /// final width on mouse-up, never every pointer movement.
+    sidebar_state: Entity<ResizableState>,
+    sidebar_width: f32,
     split_states: BTreeMap<SessionId, Entity<ResizableState>>,
     side_panes: BTreeMap<SessionId, SessionId>,
     side_focus: Option<SessionId>,
     rename_input: Entity<InputState>,
+    process_project: Option<String>,
+    process_name_input: Entity<InputState>,
+    process_command_input: Entity<InputState>,
+    process_error: Option<String>,
+    process_saving: bool,
     prompt_pending: bool,
     shutdown: Option<usize>,
     _tasks: Vec<Task<()>>,
@@ -129,6 +151,21 @@ impl Workspace {
                 this.save_rename(window, cx);
             }
         });
+        let process_name_input = cx.new(|cx| InputState::new(window, cx));
+        let process_command_input = cx.new(|cx| InputState::new(window, cx));
+        let name_subscription =
+            cx.subscribe_in(&process_name_input, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.process_command_input
+                        .update(cx, |input, cx| input.focus(window, cx));
+                }
+            });
+        let command_subscription =
+            cx.subscribe_in(&process_command_input, window, |this, _, event, _, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.save_process(cx);
+                }
+            });
         let handle = window.window_handle();
         let task = cx.spawn(async move |view, cx| {
             while let Ok(event) = events.recv().await {
@@ -149,6 +186,25 @@ impl Workspace {
             }
             let _ = weak.update(cx, |this, cx| {
                 this.ready = true;
+                if this.perf_layout == "quit" {
+                    let weak = cx.weak_entity();
+                    window.on_next_frame(move |window, cx| {
+                        window.dispatch_keystroke(Keystroke::parse("cmd-q").unwrap(), cx);
+                        window.on_next_frame(move |_, cx| {
+                            let _ = weak.update(cx, |this, _| {
+                                assert!(this.shutdown.is_some(), "Cmd-Q did not request shutdown");
+                            });
+                        });
+                    });
+                    window.refresh();
+                    return;
+                }
+                if this.perf_layout == "customization" {
+                    if !this.config.projects.is_empty() {
+                        this.smoke_customization(window, cx);
+                    }
+                    return;
+                }
                 if this.perf_layout == "side" {
                     this.smoke_side(window, cx);
                     return;
@@ -210,6 +266,7 @@ impl Workspace {
             config: Config::default(),
             projects: vec![],
             tabs: BTreeMap::new(),
+            memory: BTreeMap::new(),
             tab_order: vec![],
             active_project: None,
             selected: BTreeMap::new(),
@@ -223,20 +280,36 @@ impl Workspace {
             palette_query: String::new(),
             rename: None,
             question_parent: None,
+            customization_provider: None,
+            customization_preview: None,
+            customization_notice: None,
+            sidebar_state: cx.new(|_| ResizableState::default()),
+            sidebar_width: 280.,
             split_states: BTreeMap::new(),
             side_panes: BTreeMap::new(),
             side_focus: None,
             rename_input,
+            process_project: None,
+            process_name_input,
+            process_command_input,
+            process_error: None,
+            process_saving: false,
             prompt_pending: false,
             shutdown: None,
             _tasks: vec![task],
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, name_subscription, command_subscription],
         }
     }
     fn empty_control(&self) -> bool {
         matches!(
             self.perf_layout.as_str(),
-            "normal" | "minimal" | "no-sidebar" | "terminal-ui" | "idle20" | "scrollback20"
+            "normal"
+                | "minimal"
+                | "no-sidebar"
+                | "terminal-ui"
+                | "idle20"
+                | "scrollback20"
+                | "quit"
         )
     }
     fn active(&self) -> Option<SessionId> {
@@ -260,6 +333,17 @@ impl Workspace {
     }
     fn event(&mut self, event: CoreEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            CoreEvent::MemoryUsage(samples) => {
+                for (id, launch, bytes) in samples {
+                    if self
+                        .tabs
+                        .get(&id)
+                        .is_some_and(|tab| tab.info.launch == launch)
+                    {
+                        self.memory.insert(id, (launch, bytes));
+                    }
+                }
+            }
             CoreEvent::Restored {
                 saved,
                 layout,
@@ -288,6 +372,15 @@ impl Workspace {
                             tab.open = saved_tab.open && !is_side(&tab.info);
                         }
                     }
+                    self.sidebar_width = self
+                        .config
+                        .settings
+                        .sidebar_width
+                        .or(layout.sidebar_width)
+                        .filter(|w| w.is_finite())
+                        .unwrap_or(280.)
+                        .clamp(220., 520.);
+                    self.sidebar_state = cx.new(|_| ResizableState::default());
                     self.expanded = layout.expanded.into_iter().collect();
                     self.active_project = layout
                         .active_project
@@ -344,7 +437,37 @@ impl Workspace {
                     }
                 }));
             }
+            CoreEvent::CustomizationApplied { undone } => {
+                self.customization_notice = Some(if undone {
+                    "Previous configuration restored. Restart changed running processes to use it."
+                } else {
+                    "Customization applied. Undo is available in Cmd-P. Restart changed running processes to use their new definitions."
+                }.into());
+            }
+            CoreEvent::CustomizationPreview(proposal) => {
+                self.customization_preview = Some(proposal);
+                self.error = None;
+            }
             CoreEvent::Config(config) => {
+                crate::theme::configure(&config.settings.theme, window, cx);
+                for tab in self.tabs.values() {
+                    tab.view
+                        .update(cx, |view, cx| view.configure(&config.settings, cx));
+                }
+                if config.settings.sidebar_width != self.config.settings.sidebar_width {
+                    self.sidebar_width = config
+                        .settings
+                        .sidebar_width
+                        .or_else(|| self.last_layout.as_ref().and_then(|l| l.sidebar_width))
+                        .unwrap_or(280.)
+                        .clamp(220., 520.);
+                    let width = self.sidebar_width;
+                    self.sidebar_state.update(cx, |state, cx| {
+                        if !state.sizes().is_empty() {
+                            state.resize_panel(0, px(width), window, cx);
+                        }
+                    });
+                }
                 self.error = None;
                 let mut projects = config.projects.clone();
                 // Keep removed projects reachable while they still own tabs.
@@ -368,8 +491,27 @@ impl Workspace {
                 {
                     self.open_project(project.id.clone(), window, cx);
                 }
+                if self.ready && self.perf_layout == "customization" {
+                    self.smoke_customization(window, cx);
+                }
             }
             CoreEvent::ConfigError(error) => self.error = Some(error),
+            CoreEvent::ProcessAdded(project) => {
+                if self.process_project.as_ref() == Some(&project) {
+                    self.process_project = None;
+                    self.process_error = None;
+                    self.process_saving = false;
+                    self.restore_focus(window, cx);
+                }
+            }
+            CoreEvent::ProcessAddFailed { project, error } => {
+                if self.process_project.as_ref() == Some(&project) {
+                    self.process_saving = false;
+                    self.process_error = Some(error);
+                } else {
+                    self.error = Some(error);
+                }
+            }
             CoreEvent::ProjectAdded(project) => self.open_project(project, window, cx),
             CoreEvent::ProjectRemoved(project) => {
                 self.projects.retain(|p| p.id != project);
@@ -493,6 +635,7 @@ impl Workspace {
                 }
             }
             CoreEvent::SessionClosed(id) => {
+                self.memory.remove(&id);
                 self.split_states.remove(&id);
                 self.side_panes
                     .retain(|parent, side| *parent != id && *side != id);
@@ -537,6 +680,12 @@ impl Workspace {
             }
             CoreEvent::ShutdownProgress { remaining } => self.shutdown = Some(remaining),
             CoreEvent::ShutdownComplete { clean } => {
+                if self.perf_layout == "quit" {
+                    assert!(self.shutdown.is_some() && clean);
+                    eprintln!(
+                        "devdesk-quit-smoke PASS shortcut_requested_shutdown=true clean_shutdown=true"
+                    );
+                }
                 if let Some(stress) = &self.stress {
                     stress.report(clean);
                 }
@@ -624,11 +773,176 @@ impl Workspace {
             });
         }));
     }
+    fn memory_label(&self, info: &SessionInfo, cx: &Context<Self>) -> AnyElement {
+        let bytes = self
+            .memory
+            .get(&info.id)
+            .filter(|(launch, _)| {
+                *launch == info.launch
+                    && matches!(
+                        info.status,
+                        SessionStatus::Running | SessionStatus::Stopping
+                    )
+            })
+            .and_then(|(_, bytes)| *bytes);
+        let label = bytes.map_or_else(
+            || "—".to_string(),
+            |bytes| format!("{:.0} MB", bytes as f64 / 1_000_000.),
+        );
+        div().id(("session-memory", info.id.0)).flex_shrink_0()
+            .text_xs().text_color(cx.theme().muted_foreground).child(label)
+            .tooltip(|window, cx| Tooltip::new("Process memory including children · sampled every 5s · excludes DevDesk scrollback").build(window, cx))
+            .into_any_element()
+    }
+
+    fn terminal_rows(&self, project: &str, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let add_project = project.to_string();
+        let mut rows = v_flex().gap_1().min_w_0().child(
+            h_flex()
+                .pl_6()
+                .pr_2()
+                .pt_3()
+                .pb_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(theme.muted_foreground)
+                        .child("TERMINALS"),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("add-terminal-{project}")))
+                        .icon(IconName::Plus)
+                        .xsmall()
+                        .ghost()
+                        .tooltip("New terminal")
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.active_project = Some(add_project.clone());
+                            this.new_terminal(&NewTerminal, window, cx);
+                            this.update_visibility(window, cx);
+                            this.save_layout();
+                            cx.notify();
+                        })),
+                ),
+        );
+        // Keep shell order consistent with keyboard navigation and restoration.
+        for id in &self.tab_order {
+            let Some(tab) = self.tabs.get(id) else {
+                continue;
+            };
+            if tab.info.project != project
+                || tab.info.process.is_some()
+                || tab.info.agent.is_some()
+                || !tab.open
+            {
+                continue;
+            }
+            let id = *id;
+            let name = tab.info.name.clone();
+            rows = rows.child(
+                h_flex()
+                    .id(("terminal-row", id.0))
+                    .ml_4()
+                    .px_2()
+                    .py_2()
+                    .gap_1()
+                    .min_w_0()
+                    .rounded_md()
+                    .when(self.active() == Some(id), |row| {
+                        row.bg(theme.sidebar_accent)
+                    })
+                    .hover(|style| style.bg(theme.sidebar_accent))
+                    .child(
+                        h_flex()
+                            .id(("shell", id.0))
+                            .flex_1()
+                            .min_w_0()
+                            .gap_2()
+                            .text_sm()
+                            .cursor_pointer()
+                            .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
+                            .child(status_indicator(&tab.info, theme))
+                            .child(div().min_w_0().truncate().child(tab.info.name.clone()))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.choose_tab(id, window, cx)
+                            })),
+                    )
+                    .child(self.memory_label(&tab.info, cx))
+                    .child(
+                        div()
+                            .id(("close-terminal", id.0))
+                            .px_1()
+                            .py_1()
+                            .rounded_sm()
+                            .flex_shrink_0()
+                            .cursor_pointer()
+                            .text_color(theme.muted_foreground)
+                            .hover(|style| style.bg(theme.border).text_color(theme.foreground))
+                            .tooltip(|window, cx| Tooltip::new("Close terminal").build(window, cx))
+                            .child(Icon::new(IconName::Close).size_3())
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.close_tab(id, window, cx)
+                            })),
+                    ),
+            );
+        }
+        rows.into_any_element()
+    }
+
     fn agent_rows(&self, project: &str, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let mut rows = v_flex()
-            .gap_1()
-            .child(div().pl_3().pt_2().text_xs().child("Agents"));
+        let launch_project = project.to_string();
+        let workspace = cx.weak_entity();
+        let mut rows = v_flex().gap_1().min_w_0().child(
+            h_flex()
+                .pl_6()
+                .pr_2()
+                .pt_3()
+                .pb_1()
+                .child(
+                    div()
+                        .flex_1()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(theme.muted_foreground)
+                        .child("AGENTS"),
+                )
+                .child(
+                    Button::new(SharedString::from(format!("add-agent-{project}")))
+                        .icon(IconName::Plus)
+                        .xsmall()
+                        .ghost()
+                        .tooltip("Launch agent")
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for provider in [agent::Provider::Claude, agent::Provider::Codex] {
+                                let workspace = workspace.clone();
+                                let project = launch_project.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(format!("Launch {}", provider.label()))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = workspace.update(cx, |this, cx| {
+                                                if this.shutdown.is_some() {
+                                                    return;
+                                                }
+                                                this.active_project = Some(project.clone());
+                                                this.core.send(CoreCommand::NewAgent {
+                                                    project: project.clone(),
+                                                    picker: false,
+                                                    provider,
+                                                });
+                                                this.update_visibility(window, cx);
+                                                this.save_layout();
+                                                cx.notify();
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        }),
+                ),
+        );
         let mut agents: Vec<_> = self
             .tabs
             .iter()
@@ -664,54 +978,73 @@ impl Workspace {
                     agent::Status::TurnFailed => "Turn failed",
                     agent::Status::Attention => "Attention",
                     agent::Status::ActiveInferred => "Active (inferred)",
-                    agent::Status::Exited => "Resume",
+                    agent::Status::Exited => "Exited",
                 }
             };
+            let full_name = format!(
+                "{} · {} · {status}",
+                tab.info.name,
+                if is_side(&tab.info) {
+                    "Read-only"
+                } else {
+                    agent.record.provider.label()
+                }
+            );
             rows = rows.child(
+                // GPUI retains hover state only for identified elements. Keep
+                // it on the entire row so padding and controls repaint too.
                 h_flex()
-                    .pl_3()
-                    .when(is_side(&tab.info), |row| row.pl_6())
-                    .gap_2()
+                    .id(("agent-row", id.0))
+                    .ml_4()
+                    .px_2()
+                    .py_2()
+                    .min_w_0()
+                    .rounded_md()
+                    .when(is_side(&tab.info), |row| row.ml_6())
+                    .when(
+                        self.active() == Some(id) || self.side_focus == Some(id),
+                        |row| row.bg(theme.sidebar_accent),
+                    )
+                    .hover(|style| style.bg(theme.sidebar_accent))
+                    .gap_1()
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap_2()
+                            .min_w_0()
                             .id(("agent", id.0))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(full_name.clone()).build(window, cx)
+                            })
                             .flex_1()
                             .text_sm()
                             .cursor_pointer()
                             .when(agent.status == agent::Status::NeedsApproval, |div| {
                                 div.text_color(theme.warning)
                             })
+                            .child(status_indicator(&tab.info, theme))
                             .child(
                                 div()
-                                    .text_color(match agent.status {
-                                        agent::Status::NeedsApproval
-                                        | agent::Status::TurnFailed
-                                        | agent::Status::Attention => theme.warning,
-                                        agent::Status::Working
-                                        | agent::Status::Launching
-                                        | agent::Status::ActiveInferred => theme.primary,
-                                        _ => theme.muted_foreground,
-                                    })
-                                    .child("●"),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_sm()
+                                    .child(tab.info.name.clone()),
                             )
-                            .child(format!(
-                                "{}{} · {status}",
-                                if is_side(&tab.info) {
-                                    "↳ Read-only · "
-                                } else {
-                                    ""
-                                },
-                                tab.info.name
-                            ))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.choose_tab(id, window, cx)
                             })),
                     )
+                    .child(self.memory_label(&tab.info, cx))
                     .child(
                         div()
                             .id(("agent-toggle", id.0))
                             .text_xs()
+                            .flex_shrink_0()
+                            .px_1()
+                            .py_1()
+                            .rounded_sm()
+                            .text_color(theme.muted_foreground)
+                            .hover(|style| style.bg(theme.border).text_color(theme.foreground))
                             .cursor_pointer()
                             .child(if running { "Stop" } else { "Resume" })
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -726,35 +1059,20 @@ impl Workspace {
                     .child(
                         div()
                             .id(("remove-agent", id.0))
+                            .tooltip(|window, cx| Tooltip::new("Remove agent").build(window, cx))
                             .text_xs()
+                            .flex_shrink_0()
+                            .px_1()
+                            .py_1()
+                            .rounded_sm()
+                            .text_color(theme.muted_foreground)
+                            .hover(|style| style.bg(theme.border).text_color(theme.foreground))
                             .cursor_pointer()
-                            .child("×")
+                            .child(Icon::new(IconName::Close).size_3())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.confirm_remove(RemovalTarget::Session(id), window, cx);
                             })),
                     ),
-            );
-        }
-        for provider in [agent::Provider::Claude, agent::Provider::Codex] {
-            let project = project.to_string();
-            rows = rows.child(
-                div()
-                    .id(SharedString::from(format!(
-                        "launch-{}-{project}",
-                        provider.label()
-                    )))
-                    .pl_3()
-                    .py_1()
-                    .text_sm()
-                    .cursor_pointer()
-                    .child(format!("+ Launch {}", provider.label()))
-                    .on_click(cx.listener(move |this, _, _, _| {
-                        this.core.send(CoreCommand::NewAgent {
-                            project: project.clone(),
-                            picker: false,
-                            provider,
-                        })
-                    })),
             );
         }
         rows.into_any_element()
@@ -774,6 +1092,15 @@ impl Workspace {
             return;
         }
         let layout = layout::Layout {
+            // Keep the saved drag preference beneath an explicit config override
+            // so removing/undoing that override restores the previous width.
+            sidebar_width: if self.config.settings.sidebar_width.is_some() {
+                self.last_layout
+                    .as_ref()
+                    .and_then(|layout| layout.sidebar_width)
+            } else {
+                Some(self.sidebar_width)
+            },
             active_project: self.active_project.clone(),
             expanded: self.expanded.iter().cloned().collect(),
             selected: self
@@ -1097,7 +1424,18 @@ impl Workspace {
         }
     }
     fn close_terminal(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
-        if self.rename.is_some() || self.question_parent.is_some() || self.palette_open {
+        if self.process_project.is_some() {
+            self.cancel_process(window, cx);
+            return;
+        }
+        if self.rename.is_some()
+            || self.question_parent.is_some()
+            || self.customization_provider.is_some()
+            || self.customization_preview.is_some()
+            || self.palette_open
+        {
+            self.customization_provider = None;
+            self.customization_preview = None;
             self.question_parent = None;
             self.rename = None;
             self.palette_open = false;
@@ -1180,6 +1518,26 @@ impl Workspace {
                 _ => {}
             }));
     }
+    fn customize(
+        &mut self,
+        provider: agent::Provider,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.active_project.is_none() {
+            self.error =
+                Some("Add or select a project to open a customization conversation".into());
+            return;
+        }
+        self.rename = None;
+        self.question_parent = None;
+        self.customization_provider = Some(provider);
+        self.rename_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
     fn ask_agent_question(
         &mut self,
         _: &AskAgentQuestion,
@@ -1188,17 +1546,30 @@ impl Workspace {
     ) {
         let Some(id) = self.active() else { return };
         let tab = &self.tabs[&id];
-        if !tab.info.agent.as_ref().is_some_and(|agent| {
-            agent.record.role == agent::Role::Primary
-                && agent.record.session_id.is_some()
-                && agent.status != agent::Status::Launching
-        }) || tab.info.status != SessionStatus::Running
-        {
-            self.error = Some("Select a running agent with a known session ID".into());
+        let problem = match &tab.info.agent {
+            None => Some("Select a Claude or Codex agent tab, rather than a shell or process tab"),
+            Some(agent) if agent.record.role != agent::Role::Primary => {
+                Some("Select the original agent to start another side conversation")
+            }
+            Some(_) if tab.info.status != SessionStatus::Running => {
+                Some("Resume or start the selected agent before asking a side question")
+            }
+            Some(agent) if agent.status == agent::Status::Launching => {
+                Some("The agent is still launching; wait until it is ready")
+            }
+            Some(agent) if agent.record.session_id.is_none() => {
+                Some("The agent has not reported its session ID yet; complete a turn and try again")
+            }
+            Some(_) => None,
+        };
+        if let Some(problem) = problem {
+            self.error = Some(problem.into());
             cx.notify();
             return;
         }
+        self.error = None;
         self.rename = None;
+        self.customization_provider = None;
         self.question_parent = Some(id);
         self.rename_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -1216,6 +1587,7 @@ impl Workspace {
             && let Some(tab) = self.tabs.get(&id)
         {
             self.question_parent = None;
+            self.customization_provider = None;
             self.rename = Some(id);
             self.rename_input.update(cx, |input, cx| {
                 input.set_value(tab.info.name.clone(), window, cx);
@@ -1225,6 +1597,22 @@ impl Workspace {
         }
     }
     fn save_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(provider) = self.customization_provider {
+            let request = self.rename_input.read(cx).value().to_string();
+            if request.trim().is_empty() {
+                self.error = Some("Describe how you want to customize DevDesk".into());
+                cx.notify();
+                return;
+            }
+            if let Some(project) = &self.active_project {
+                self.core.send(CoreCommand::Customize {
+                    project: project.clone(),
+                    provider,
+                    request,
+                });
+            }
+            self.customization_provider = None;
+        }
         if let Some(parent) = self.question_parent.take() {
             self.core.send(CoreCommand::ForkAgent {
                 parent,
@@ -1261,6 +1649,24 @@ impl Workspace {
     }
     fn palette_actions(&self, cx: &App) -> Vec<(String, PaletteAction)> {
         let mut actions = vec![
+            (
+                "Customize DevDesk with Claude…".into(),
+                PaletteAction::Customize(agent::Provider::Claude),
+            ),
+            (
+                "Customize DevDesk with Codex…".into(),
+                PaletteAction::Customize(agent::Provider::Codex),
+            ),
+            (
+                "Review Customization…".into(),
+                PaletteAction::ReviewCustomization,
+            ),
+            (
+                "Undo Last Customization".into(),
+                PaletteAction::UndoCustomization,
+            ),
+            ("Widen Sidebar".into(), PaletteAction::ResizeSidebar(40)),
+            ("Narrow Sidebar".into(), PaletteAction::ResizeSidebar(-40)),
             ("New Terminal".into(), PaletteAction::New),
             ("Close Terminal".into(), PaletteAction::Close),
             ("Rename Terminal".into(), PaletteAction::Rename),
@@ -1274,6 +1680,14 @@ impl Workspace {
             )
         }));
         if let Some(project) = &self.active_project {
+            if let Some(config) = self.projects.iter().find(|p| p.id == *project) {
+                for terminal in &config.terminals {
+                    actions.push((
+                        format!("Open Terminal Preset: {}", terminal.name),
+                        PaletteAction::TerminalPreset(project.clone(), terminal.name.clone()),
+                    ));
+                }
+            }
             let provider = self
                 .projects
                 .iter()
@@ -1411,11 +1825,29 @@ impl Workspace {
     ) {
         self.palette_open = false;
         match action {
+            PaletteAction::Customize(provider) => self.customize(provider, window, cx),
+            PaletteAction::ReviewCustomization => self.core.send(CoreCommand::ReviewCustomization),
+            PaletteAction::UndoCustomization => self.core.send(CoreCommand::UndoCustomization),
             PaletteAction::Project(project) => self.open_project(project, window, cx),
             PaletteAction::New => self.new_terminal(&NewTerminal, window, cx),
+            PaletteAction::TerminalPreset(project, name) => self
+                .core
+                .send(CoreCommand::NewTerminalPreset { project, name }),
             PaletteAction::Close => self.close_terminal(&CloseTerminal, window, cx),
             PaletteAction::Rename => self.rename_terminal(&RenameTerminal, window, cx),
             PaletteAction::Add => self.add_project(&AddProject, window, cx),
+            PaletteAction::ResizeSidebar(delta) => {
+                let state = self.sidebar_state.clone();
+                state.update(cx, |state, cx| {
+                    if let Some(size) = state.sizes().first().copied() {
+                        state.resize_panel(0, size + px(delta as f32), window, cx);
+                    }
+                });
+                if let Some(size) = state.read(cx).sizes().first() {
+                    self.sidebar_width = f32::from(*size);
+                    self.save_layout();
+                }
+            }
             PaletteAction::ResizeSide(delta) => {
                 if let Some(parent) = self.active()
                     && let Some(state) = self.split_states.get(&parent).cloned()
@@ -1467,7 +1899,10 @@ impl Workspace {
                 self.core.send(CoreCommand::ResumeAgent(id));
             }
         }
-        if self.rename.is_none() && self.question_parent.is_none() {
+        if self.rename.is_none()
+            && self.question_parent.is_none()
+            && self.customization_provider.is_none()
+        {
             self.restore_focus(window, cx);
         }
         cx.notify();
@@ -1536,6 +1971,32 @@ fn dot(status: &SessionStatus) -> &'static str {
     }
 }
 
+/// Lifecycle takes precedence over agent activity, so an exited or stopping
+/// agent cannot look ready because its last hook reported Idle or Working.
+fn status_indicator(info: &SessionInfo, theme: &Theme) -> impl IntoElement {
+    let color = match &info.status {
+        SessionStatus::Failed(_) => theme.danger,
+        SessionStatus::Exited {
+            code: Some(code), ..
+        } if *code != 0 => theme.danger,
+        SessionStatus::Stopped | SessionStatus::Exited { .. } => theme.muted_foreground,
+        SessionStatus::Starting | SessionStatus::Stopping => theme.warning,
+        SessionStatus::Running => match info.agent.as_ref().map(|agent| &agent.status) {
+            Some(agent::Status::NeedsApproval | agent::Status::Attention) => theme.warning,
+            Some(agent::Status::TurnFailed) => theme.danger,
+            Some(agent::Status::Working | agent::Status::ActiveInferred) => theme.info,
+            Some(agent::Status::Launching) => theme.warning,
+            Some(agent::Status::Exited) => theme.muted_foreground,
+            Some(agent::Status::Idle) | None => theme.success,
+        },
+    };
+    div()
+        .flex_shrink_0()
+        .text_xs()
+        .text_color(color)
+        .child(dot(&info.status))
+}
+
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Split state belongs to this view, rather than render-local keyed
@@ -1552,35 +2013,84 @@ impl Render for Workspace {
         let fg = theme.foreground;
         let muted = theme.muted_foreground;
         let border = theme.border;
-        let active_bg = theme.accent;
+        let active_bg = theme.sidebar_accent;
         if self.perf_layout == "minimal" {
             return div().size_full().bg(bg).into_any_element();
         }
         let mut sidebar = v_flex()
             .id("projects-sidebar")
-            .w(px(240.))
-            .h_full()
-            .flex_shrink_0()
-            .p_3()
-            .gap_2()
-            .border_r_1()
-            .border_color(border)
-            .child(div().font_bold().child("DevDesk"))
-            .child(div().text_xs().text_color(muted).child("PROJECTS"));
+            .size_full()
+            .min_w_0()
+            .bg(theme.sidebar)
+            .text_color(theme.sidebar_foreground)
+            .child(
+                v_flex()
+                    .px_4()
+                    .py_4()
+                    .gap_1()
+                    .child(div().text_sm().font_bold().child("DevDesk"))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child("Developer workspace"),
+                    ),
+            );
+        let mut project_list = v_flex()
+            .id("sidebar-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .px_2()
+            .pb_3()
+            .gap_1()
+            .child(
+                div()
+                    .px_2()
+                    .pt_2()
+                    .pb_2()
+                    .text_xs()
+                    .font_semibold()
+                    .text_color(muted)
+                    .child("PROJECTS"),
+            );
         for project in &self.projects {
             let id = project.id.clone();
             let toggle_id = id.clone();
             let remove_id = id.clone();
+            let full_name = project.name.clone();
             let expanded = self.expanded.contains(&id);
             let selected = self.active_project.as_ref() == Some(&id);
-            sidebar = sidebar.child(
+            project_list = project_list.child(
                 h_flex()
-                    .gap_2()
+                    .id(SharedString::from(format!("project-row-{id}")))
+                    .hover(|style| style.bg(active_bg))
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .when(selected, |row| row.bg(active_bg))
+                    .gap_1()
                     .child(
                         div()
                             .id(SharedString::from(format!("expand-{id}")))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .flex_shrink_0()
                             .cursor_pointer()
-                            .child(if expanded { "▾" } else { "▸" })
+                            .w(px(18.))
+                            .h(px(24.))
+                            .text_color(muted)
+                            .child(
+                                Icon::new(if expanded {
+                                    IconName::ChevronDown
+                                } else {
+                                    IconName::ChevronRight
+                                })
+                                .size_3(),
+                            )
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 if !this.expanded.remove(&toggle_id) {
                                     this.expanded.insert(toggle_id.clone());
@@ -1592,11 +2102,16 @@ impl Render for Workspace {
                     .child(
                         div()
                             .id(SharedString::from(format!("project-{id}")))
+                            .tooltip(move |window, cx| {
+                                Tooltip::new(full_name.clone()).build(window, cx)
+                            })
                             .flex_1()
                             .cursor_pointer()
-                            .rounded_sm()
-                            .p_1()
-                            .when(selected, |this| this.bg(active_bg))
+                            .min_w_0()
+                            .truncate()
+                            .text_sm()
+                            .font_semibold()
+                            .py_1()
                             .child(project.name.clone())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_project(id.clone(), window, cx)
@@ -1605,9 +2120,15 @@ impl Render for Workspace {
                     .child(
                         div()
                             .id(SharedString::from(format!("remove-project-{remove_id}")))
+                            .tooltip(|window, cx| Tooltip::new("Remove project").build(window, cx))
                             .cursor_pointer()
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .text_color(muted)
+                            .hover(|style| style.bg(active_bg).text_color(theme.danger))
                             .text_xs()
-                            .child("×")
+                            .child(Icon::new(IconName::Close).size_3())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.confirm_remove(
                                     RemovalTarget::Project(remove_id.clone()),
@@ -1618,6 +2139,32 @@ impl Render for Workspace {
                     ),
             );
             if expanded {
+                let add_process_project = project.id.clone();
+                project_list = project_list.child(
+                    h_flex()
+                        .pl_6()
+                        .pr_2()
+                        .pt_3()
+                        .pb_1()
+                        .child(
+                            div()
+                                .flex_1()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(muted)
+                                .child("PROCESSES"),
+                        )
+                        .child(
+                            Button::new(SharedString::from(format!("add-process-{}", project.id)))
+                                .icon(IconName::Plus)
+                                .xsmall()
+                                .ghost()
+                                .tooltip("Add process")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.show_process_form(add_process_project.clone(), window, cx);
+                                })),
+                        ),
+                );
                 for (id, tab) in &self.tabs {
                     if tab.info.project != project.id {
                         continue;
@@ -1642,35 +2189,66 @@ impl Render for Workspace {
                             SessionStatus::Stopping => "Stopping".into(),
                             SessionStatus::Exited { .. } => "Exited".into(),
                         };
-                        sidebar = sidebar.child(
+                        let full_name = tab.info.name.clone();
+                        let detail = if tab.info.config_changed {
+                            format!("{status} · config changed — restart to apply")
+                        } else {
+                            status
+                        };
+                        project_list = project_list.child(
                             v_flex()
-                                .pl_3()
+                                .id(("process-row", id.0))
+                                .flex_shrink_0()
+                                .ml_4()
+                                .px_2()
+                                .py_2()
+                                .rounded_md()
+                                .min_w_0()
+                                .when(self.active() == Some(id), |row| row.bg(active_bg))
+                                .hover(|style| style.bg(active_bg))
                                 .gap_1()
                                 .child(
                                     h_flex()
                                         .gap_2()
                                         .child(
-                                            div()
+                                            h_flex()
                                                 .id(("process", id.0))
+                                                .tooltip(move |window, cx| {
+                                                    Tooltip::new(format!("{full_name} · {detail}"))
+                                                        .build(window, cx)
+                                                })
                                                 .flex_1()
+                                                .min_w_0()
+                                                .gap_2()
                                                 .cursor_pointer()
                                                 .text_sm()
                                                 .when(failed, |div| div.text_color(theme.danger))
-                                                .child(format!(
-                                                    "{} {}",
-                                                    dot(&tab.info.status),
-                                                    tab.info.name
-                                                ))
+                                                .child(status_indicator(&tab.info, theme))
+                                                .child(
+                                                    div()
+                                                        .min_w_0()
+                                                        .truncate()
+                                                        .child(tab.info.name.clone()),
+                                                )
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         this.choose_tab(id, window, cx)
                                                     },
                                                 )),
                                         )
+                                        .child(self.memory_label(&tab.info, cx))
                                         .child(
                                             div()
                                                 .id(("process-toggle", id.0))
                                                 .cursor_pointer()
+                                                .flex_shrink_0()
+                                                .px_1()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .text_color(muted)
+                                                .hover(|style| {
+                                                    style.bg(theme.border).text_color(fg)
+                                                })
                                                 .text_xs()
                                                 .child(if running { "Stop" } else { "Start" })
                                                 .on_click(cx.listener(move |this, _, _, _| {
@@ -1684,9 +2262,21 @@ impl Render for Workspace {
                                         .child(
                                             div()
                                                 .id(("process-restart", id.0))
+                                                .tooltip(|window, cx| {
+                                                    Tooltip::new("Restart process")
+                                                        .build(window, cx)
+                                                })
                                                 .cursor_pointer()
+                                                .flex_shrink_0()
+                                                .px_1()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .text_color(muted)
+                                                .hover(|style| {
+                                                    style.bg(theme.border).text_color(fg)
+                                                })
                                                 .text_xs()
-                                                .child("↻")
+                                                .child(Icon::new(IconName::RotateCw).size_3())
                                                 .on_click(cx.listener(move |this, _, _, _| {
                                                     this.core.send(CoreCommand::Restart(id))
                                                 })),
@@ -1694,9 +2284,20 @@ impl Render for Workspace {
                                         .child(
                                             div()
                                                 .id(("remove-process", id.0))
+                                                .tooltip(|window, cx| {
+                                                    Tooltip::new("Remove process").build(window, cx)
+                                                })
                                                 .cursor_pointer()
+                                                .flex_shrink_0()
+                                                .px_1()
+                                                .py_1()
+                                                .rounded_sm()
+                                                .text_color(muted)
+                                                .hover(|style| {
+                                                    style.bg(theme.border).text_color(fg)
+                                                })
                                                 .text_xs()
-                                                .child("×")
+                                                .child(Icon::new(IconName::Close).size_3())
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
                                                         this.confirm_remove(
@@ -1707,88 +2308,34 @@ impl Render for Workspace {
                                                     },
                                                 )),
                                         ),
-                                )
-                                .child(div().text_xs().text_color(muted).child(
-                                    if tab.info.config_changed {
-                                        format!("{status} · config changed — restart to apply")
-                                    } else {
-                                        status
-                                    },
-                                )),
+                                ),
                         );
                         continue;
                     }
-                    sidebar = sidebar.child(
-                        div()
-                            .id(("shell", id.0))
-                            .pl_5()
-                            .py_1()
-                            .text_sm()
-                            .cursor_pointer()
-                            .child(format!("{} {}", dot(&tab.info.status), tab.info.name))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.choose_tab(id, window, cx)
-                            })),
-                    );
                 }
-                sidebar = sidebar.child(self.agent_rows(&project.id, cx));
+                project_list = project_list.child(self.terminal_rows(&project.id, cx));
+                project_list = project_list.child(self.agent_rows(&project.id, cx));
             }
         }
-        sidebar = sidebar.child(
-            div()
-                .id("add-project")
-                .cursor_pointer()
-                .py_2()
-                .text_sm()
-                .child("+ Add Project…")
-                .on_click(
-                    cx.listener(|this, _, window, cx| this.add_project(&AddProject, window, cx)),
+        sidebar =
+            sidebar.child(project_list).child(
+                div().px_3().py_2().border_t_1().border_color(border).child(
+                    div()
+                        .id("add-project")
+                        .cursor_pointer()
+                        .px_2()
+                        .py_2()
+                        .rounded_md()
+                        .hover(|style| style.bg(active_bg))
+                        .text_sm()
+                        .child("+ Add Project…")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.add_project(&AddProject, window, cx)
+                        })),
                 ),
-        );
-        let ids = self.project_tabs();
-        let selected_index = ids
-            .iter()
-            .position(|id| Some(*id) == self.active())
-            .unwrap_or(0);
-        let mut tabs = TabBar::new("shell-tabs").selected_index(selected_index);
-        for id in &ids {
-            let tab = &self.tabs[id];
-            let id = *id;
-            tabs = tabs.child(
-                Tab::new()
-                    .label(format!("{} {}", dot(&tab.info.status), tab.info.name))
-                    .suffix(
-                        div()
-                            .id(("close", id.0))
-                            .px_1()
-                            .cursor_pointer()
-                            .child("×")
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.close_tab(id, window, cx);
-                            })),
-                    ),
-            );
-        }
-        let click_ids = ids.clone();
-        tabs = tabs
-            .on_click(cx.listener(move |this, index: &usize, window, cx| {
-                if let Some(id) = click_ids.get(*index) {
-                    this.choose_tab(*id, window, cx);
-                }
-            }))
-            .suffix(
-                div()
-                    .id("new-terminal")
-                    .px_3()
-                    .cursor_pointer()
-                    .child("+")
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.new_terminal(&NewTerminal, window, cx)
-                    })),
             );
         let visible = self.visible_ids();
-        let mut content = v_flex().flex_1().min_w_0().h_full().child(tabs);
+        let mut content = v_flex().flex_1().min_w_0().h_full();
         if let Some(side) = self
             .active()
             .and_then(|id| self.side_panes.get(&id))
@@ -1814,11 +2361,15 @@ impl Render for Workspace {
                         .text_xs()
                         .text_color(muted)
                         .child(div().flex_1().child(chrome))
-                        .child(div().id("close-side").cursor_pointer().child("×").on_click(
-                            cx.listener(move |this, _, window, cx| {
-                                this.close_tab(side, window, cx)
-                            }),
-                        )),
+                        .child(
+                            div()
+                                .id("close-side")
+                                .cursor_pointer()
+                                .child(Icon::new(IconName::Close).size_3())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.close_tab(side, window, cx)
+                                })),
+                        ),
                 )
                 .child(
                     div()
@@ -1870,11 +2421,19 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .key_context("Workspace")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape"
-                    && (this.rename.is_some() || this.question_parent.is_some())
+                if event.keystroke.key == "escape" && this.process_project.is_some() {
+                    this.cancel_process(window, cx);
+                    cx.stop_propagation();
+                } else if event.keystroke.key == "escape"
+                    && (this.rename.is_some()
+                        || this.question_parent.is_some()
+                        || this.customization_provider.is_some()
+                        || this.customization_preview.is_some())
                 {
                     this.question_parent = None;
                     this.rename = None;
+                    this.customization_provider = None;
+                    this.customization_preview = None;
                     this.restore_focus(window, cx);
                     cx.stop_propagation();
                     cx.notify();
@@ -1912,13 +2471,35 @@ impl Render for Workspace {
         if let Some(error) = &self.error {
             body = body.child(div().p_2().text_sm().bg(theme.danger).child(error.clone()));
         }
-        body = body.child(
-            h_flex()
-                .flex_1()
-                .min_h_0()
-                .when(self.perf_layout != "no-sidebar", |this| this.child(sidebar))
-                .child(content),
-        );
+        let sidebar_owner = cx.weak_entity();
+        body = body.child(if self.perf_layout == "no-sidebar" {
+            content.into_any_element()
+        } else {
+            h_resizable("workspace-sidebar-split")
+                .with_state(&self.sidebar_state)
+                .on_resize(move |state, _, cx| {
+                    let width = state.read(cx).sizes().first().copied();
+                    if let Some(width) = width {
+                        let _ = sidebar_owner.update(cx, |this, _| {
+                            this.sidebar_width = f32::from(width);
+                            this.save_layout();
+                        });
+                    }
+                })
+                .child(
+                    resizable_panel()
+                        .size(px(self.sidebar_width))
+                        .flex_none()
+                        .size_range(px(220.)..px(520.))
+                        .child(sidebar),
+                )
+                .child(
+                    resizable_panel()
+                        .size_range(px(320.)..Pixels::MAX)
+                        .child(content),
+                )
+                .into_any_element()
+        });
         if self.palette_open {
             let entries = self.palette_actions(cx);
             let actions: Vec<_> = entries.iter().map(|(_, action)| action.clone()).collect();
@@ -1964,7 +2545,62 @@ impl Render for Workspace {
                     .child(div().w(px(560.)).h_auto().child(palette)),
             );
         }
-        if self.rename.is_some() || self.question_parent.is_some() {
+        if let Some(notice) = &self.customization_notice {
+            body = body.child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .p_3()
+                    .bg(bg)
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .child(div().flex_1().text_sm().child(notice.clone()))
+                            .child(
+                                Button::new("dismiss-customization-notice")
+                                    .small()
+                                    .label("Dismiss")
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.customization_notice = None;
+                                        cx.notify();
+                                    })),
+                            ),
+                    ),
+            );
+        }
+        if let Some(preview) = self.customization_preview.clone() {
+            let proposal = preview.proposal;
+            let reviewed = proposal.clone();
+            body = body.child(div().absolute().inset_0().bg(hsla(0., 0., 0., 0.4))
+                .flex().justify_center().pt(px(60.)).child(
+                    v_flex().w(px(720.)).h(px(560.)).p_4().gap_3().rounded_lg().bg(bg)
+                        .child(div().font_bold().child("Review DevDesk customization"))
+                        .child(div().text_sm().child("Review the proposed configuration below, including commands and autostart. Appearance updates live. Running processes require a restart; autostart applies when a project is opened. Undo restores configuration, not command side effects."))
+                        .child(v_flex().id("customization-proposal").flex_1().min_h_0().overflow_y_scroll().text_sm()
+                            .children(preview.changes.lines().chain(std::iter::once("— Complete proposed configuration —")).chain(proposal.lines()).enumerate().map(|(index, line)| {
+                                div().id(SharedString::from(format!("proposal-line-{index}"))).child(line.to_string())
+                            })))
+                        .child(h_flex().gap_3()
+                            .child(Button::new("apply-customization").label("Apply changes")
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.core.send(CoreCommand::ApplyCustomization(reviewed.clone()));
+                                    this.customization_preview = None;
+                                    this.restore_focus(window, cx);
+                                    cx.notify();
+                                })))
+                            .child(Button::new("cancel-customization").label("Cancel")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.customization_preview = None;
+                                    this.restore_focus(window, cx);
+                                    cx.notify();
+                                }))))));
+        }
+        if self.rename.is_some()
+            || self.question_parent.is_some()
+            || self.customization_provider.is_some()
+        {
             body = body.child(
                 div()
                     .absolute()
@@ -1972,20 +2608,24 @@ impl Render for Workspace {
                     .bg(hsla(0., 0., 0., 0.3))
                     .flex()
                     .justify_center()
+                    .items_start()
                     .pt(px(100.))
                     .child(
                         v_flex()
-                            .w(px(400.))
-                            .h(px(140.))
+                            .w(px(560.))
+                            .h_auto()
                             .p_4()
                             .gap_3()
                             .rounded_lg()
                             .bg(bg)
-                            .child(if self.question_parent.is_some() {
+                            .child(if self.customization_provider.is_some() {
+                                "Customize DevDesk · describe your workspace"
+                            } else if self.question_parent.is_some() {
                                 "Ask Agent Question · read-only snapshot"
                             } else {
                                 "Rename terminal"
                             })
+                            .when(self.customization_provider.is_some(), |panel| panel.child(div().text_sm().child("Try: use warm-dark, set text to 16, and narrow the sidebar. The agent prepares a proposal; choose Review Customization in Cmd-P when ready.")))
                             .child(Input::new(&self.rename_input))
                             .child(
                                 h_flex()
@@ -1994,7 +2634,9 @@ impl Render for Workspace {
                                         div()
                                             .id("rename-save")
                                             .cursor_pointer()
-                                            .child(if self.question_parent.is_some() {
+                                            .child(if self.customization_provider.is_some() {
+                                                "Start conversation ↵"
+                                            } else if self.question_parent.is_some() {
                                                 "Ask ↵"
                                             } else {
                                                 "Save ↵"
@@ -2010,6 +2652,7 @@ impl Render for Workspace {
                                             .child("Cancel")
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.rename = None;
+                                                this.customization_provider = None;
                                                 this.question_parent = None;
                                                 this.restore_focus(window, cx);
                                                 cx.notify();
@@ -2018,6 +2661,9 @@ impl Render for Workspace {
                             ),
                     ),
             );
+        }
+        if self.process_project.is_some() {
+            body = body.child(self.process_form(cx));
         }
         if let Some(remaining) = self.shutdown {
             body = body.child(

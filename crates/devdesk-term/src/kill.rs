@@ -10,6 +10,28 @@ pub struct ProcessIdentity {
 }
 
 impl ProcessIdentity {
+    /// Physical footprint in bytes, with birth checks around the kernel query.
+    /// Call on a worker. A PID that exited or was reused has no valid sample.
+    pub fn memory_footprint(self) -> Option<u64> {
+        if Self::read(self.pid).ok() != Some(self) {
+            return None;
+        }
+        // SAFETY: the SDK requires an owned rusage_info_v0 buffer, cast to its
+        // opaque rusage_info_t pointer type. Flavor V0 fixes the structure size.
+        let mut usage: libc::rusage_info_v0 = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::proc_pid_rusage(
+                self.pid,
+                libc::RUSAGE_INFO_V0,
+                (&mut usage as *mut libc::rusage_info_v0).cast(),
+            )
+        };
+        if result != 0 || Self::read(self.pid).ok() != Some(self) {
+            return None;
+        }
+        Some(usage.ri_phys_footprint)
+    }
+
     pub fn read(pid: i32) -> io::Result<Self> {
         let info = bsd_info(pid)?;
         Ok(Self {
@@ -82,6 +104,86 @@ fn process_ids() -> io::Result<Vec<i32>> {
     }
     pids.truncate(length as usize);
     Ok(pids)
+}
+
+/// Sample every session tree from one process-list snapshot, including captured
+/// background sessions and live descendants that created a separate SID. This
+/// is read-only accounting, not an extension of signalling ownership. Each PID
+/// contributes once, and missing/denied data is unavailable rather than zero.
+pub fn memory_footprints(groups: &[Vec<OwnedSession>]) -> Vec<Option<u64>> {
+    use std::collections::BTreeMap;
+    let Ok(pids) = process_ids() else {
+        return vec![None; groups.len()];
+    };
+    let records: BTreeMap<_, _> = pids
+        .into_iter()
+        .filter_map(|pid| {
+            let info = bsd_info(pid).ok()?;
+            if info.pbi_status == 5 {
+                return None;
+            }
+            let identity = ProcessIdentity {
+                pid,
+                started_us: info.pbi_start_tvsec * 1_000_000 + info.pbi_start_tvusec,
+            };
+            // SAFETY: getsid only reads kernel state for a positive process ID.
+            Some((
+                pid,
+                (identity, info.pbi_ppid as i32, unsafe { libc::getsid(pid) }),
+            ))
+        })
+        .collect();
+    let mut owners = BTreeMap::new();
+    for (group, sessions) in groups.iter().enumerate() {
+        for session in sessions {
+            if ProcessIdentity::read(session.leader.pid)
+                .ok()
+                .is_some_and(|current| current != session.leader)
+            {
+                continue;
+            }
+            for (&pid, &(identity, _, sid)) in &records {
+                if sid == session.leader.pid && identity.started_us >= session.leader.started_us {
+                    owners.entry(pid).or_insert(group);
+                }
+            }
+        }
+    }
+    loop {
+        let mut added = false;
+        for (&pid, &(identity, parent, _)) in &records {
+            if owners.contains_key(&pid) {
+                continue;
+            }
+            if let Some(&group) = owners.get(&parent)
+                && let Some(&(ancestor, _, _)) = records.get(&parent)
+                && ancestor.started_us <= identity.started_us
+                && ProcessIdentity::read(parent).ok() == Some(ancestor)
+            {
+                owners.insert(pid, group);
+                added = true;
+            }
+        }
+        if !added {
+            break;
+        }
+    }
+    let mut totals = vec![None; groups.len()];
+    let mut unavailable = vec![false; groups.len()];
+    for (pid, group) in owners {
+        match records[&pid].0.memory_footprint() {
+            Some(bytes) => {
+                totals[group] = Some(totals[group].unwrap_or(0u64).saturating_add(bytes))
+            }
+            None => unavailable[group] = true,
+        }
+    }
+    for (total, unavailable) in totals.iter_mut().zip(unavailable) {
+        if unavailable {
+            *total = None;
+        }
+    }
+    totals
 }
 
 #[derive(Clone, Copy, Debug)]

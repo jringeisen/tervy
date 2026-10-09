@@ -53,6 +53,7 @@ fn restores_shell_cwd_and_agent_stub_without_launching_primary_or_side_records()
         .unwrap();
     let key = format!("agent:{}", record.id);
     let mut layout = Layout {
+        sidebar_width: Some(320.),
         active_project: Some("p".into()),
         selected: vec![key.clone()],
         expanded: vec!["p".into()],

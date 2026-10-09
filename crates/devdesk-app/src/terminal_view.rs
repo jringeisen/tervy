@@ -11,11 +11,11 @@ use devdesk_term::snapshot::{Palette, RenderSnapshot};
 use devdesk_term::{
     Dimensions, Event, Scroll, TermMode, TerminalEvents, TerminalHandle, TerminalSignal,
 };
-use gpui_kit::component::{ActiveTheme, v_flex};
+use gpui_kit::component::{Theme, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::*;
 
-use crate::terminal_element::{CellMetrics, TerminalElement};
+use crate::terminal_element::{CellMetrics, TerminalElement, color as terminal_color};
 
 gpui_kit::actions!(devdesk_terminal, [SendTab, SendBacktab]);
 
@@ -65,6 +65,20 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
+    pub fn configure(&mut self, settings: &Settings, cx: &mut Context<Self>) {
+        self.font_size = settings.font_size;
+        self.font_family = std::env::var("DEVDESK_FONT_FAMILY")
+            .unwrap_or_else(|_| settings.font_family.clone())
+            .into();
+        self.option_as_meta = settings.option_as_meta
+            || std::env::var("DEVDESK_OPTION_AS_META").as_deref() == Ok("1");
+        self.palette = crate::theme::terminal_palette(cx);
+        if let Some(session) = &self.session {
+            session.handle.invalidate();
+        }
+        cx.notify();
+    }
+
     pub fn new(
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -84,7 +98,7 @@ impl TerminalView {
             focus,
             session: None,
             size: Dimensions::default(),
-            palette: Palette::default(),
+            palette: crate::theme::terminal_palette(cx),
             bounds: Bounds::default(),
             metrics: CellMetrics::default(),
             snapshot: None,
@@ -108,6 +122,19 @@ impl TerminalView {
             subscriptions: Vec::new(),
             tasks: Vec::new(),
         };
+        view.subscriptions
+            .push(cx.observe_global::<Theme>(|view, cx| {
+                let palette = crate::theme::terminal_palette(cx);
+                if view.palette != palette {
+                    view.palette = palette;
+                    // No process restart or terminal reset: snapshots resolve
+                    // existing cells through the new palette on the next paint.
+                    if let Some(session) = &view.session {
+                        session.handle.invalidate();
+                    }
+                    cx.notify();
+                }
+            }));
         view.subscriptions
             .push(cx.on_focus(&view.focus, window, |view, _, cx| {
                 view.focused = true;
@@ -756,16 +783,11 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
-        self.palette = Palette {
-            foreground: rgb_color(theme.foreground),
-            background: rgb_color(theme.background),
-            selection: rgb_color(theme.selection),
-        };
         let status = self.status.clone();
         let warning = self.warning.as_deref().unwrap_or("");
         v_flex()
             .size_full()
+            .bg(terminal_color(self.palette.background))
             .min_w_0()
             .min_h_0()
             .child(
@@ -774,6 +796,9 @@ impl Render for TerminalView {
                     .flex_1()
                     .min_h_0()
                     .w_full()
+                    // The element receives the inset content bounds, keeping
+                    // PTY sizing, selection and IME coordinates aligned.
+                    .p(px(12.))
                     .overflow_hidden()
                     .track_focus(&self.focus)
                     .key_context("Terminal")
@@ -797,7 +822,7 @@ impl Render for TerminalView {
                     .px_3()
                     .py_1()
                     .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_color(terminal_color(self.palette.indexed(268)))
                     .child(format!(
                         "{}{}{}",
                         if self.bell { "● Bell · " } else { "" },
@@ -813,15 +838,6 @@ impl Render for TerminalView {
                         }
                     )),
             )
-    }
-}
-
-pub fn rgb_color(color: Hsla) -> devdesk_term::Rgb {
-    let color: Rgba = color.into();
-    devdesk_term::Rgb {
-        r: (color.r * 255.).round() as u8,
-        g: (color.g * 255.).round() as u8,
-        b: (color.b * 255.).round() as u8,
     }
 }
 

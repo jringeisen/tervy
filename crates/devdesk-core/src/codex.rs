@@ -172,7 +172,7 @@ impl AgentProvider for CodexProvider {
             return Err("A fork must persist the read-only Side role".into());
         }
         let mut args = match c.request {
-            Request::New => vec![],
+            Request::New | Request::Prompt(_) => vec![],
             Request::Resume => vec![
                 "resume".into(),
                 c.record
@@ -230,6 +230,9 @@ impl AgentProvider for CodexProvider {
         }
         if let Request::Fork { question, .. } = c.request {
             args.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: {question}"));
+        }
+        if let Request::Prompt(prompt) = c.request {
+            args.push(prompt.clone());
         }
         let mut variables = crate::agent::hook_environment(c, environment);
         // User hooks/notify execute outside the model sandbox. Primary preserves
@@ -343,7 +346,7 @@ mod tests {
                 Request::New => vec![],
                 Request::Resume => vec!["resume".into(), record.session_id.clone().unwrap()],
                 Request::ResumePicker => vec!["resume".into()],
-                Request::Fork { .. } => unreachable!(),
+                Request::Fork { .. } | Request::Prompt(_) => unreachable!(),
             };
             expected.extend(common());
             assert_eq!(spec.args, expected);
@@ -355,6 +358,15 @@ mod tests {
             );
             assert_eq!(spec.env["DEVDESK_LAUNCH_ID"], "8");
         }
+        let prompt = Request::Prompt("Make the font larger\nWrite proposal.toml".into());
+        let spec = launch(&record, &prompt, &environment).unwrap();
+        assert_eq!(
+            spec.args.last().unwrap(),
+            "Make the font larger\nWrite proposal.toml"
+        );
+        let mut side = record.clone();
+        side.role = Role::Side;
+        assert!(launch(&side, &prompt, &environment).is_err());
         record.role = Role::Side;
         let request = Request::Fork {
             parent_session_id: record.session_id.clone().unwrap(),

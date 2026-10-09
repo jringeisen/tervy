@@ -352,7 +352,7 @@ Details: [agent-integration.md](agent-integration.md).
 
 | What | Where | Format | Written by |
 |---|---|---|---|
-| Projects, processes, terminal presets, settings | `~/Library/Application Support/DevDesk/config.toml` | TOML, **hand-edited** | User (DevDesk only appends a project via the folder picker, using `toml_edit` to keep comments) |
+| Projects, processes, terminal presets, settings | `~/Library/Application Support/DevDesk/config.toml` | TOML, **user-owned** | User; folder picker and explicit customization Apply/Undo (validated proposals preserve the original file for Undo) |
 | Agent records, UI layout, session ledger, schema version | `…/DevDesk/state.db` | SQLite (WAL) | Supervisor thread only |
 | Hook socket | `…/DevDesk/run/devdesk.sock` (dir 0700) | Unix socket, mode 0600. macOS `sun_path` is limited to **104 bytes**: the path is ~57 chars here. If a long home path ever exceeds the limit, fall back to `$TMPDIR/devdesk-<uid>.sock` (still 0600) | — |
 | Single-instance lock | `…/DevDesk/devdesk.lock` | flock | — |
@@ -611,3 +611,31 @@ reader exists; it is never used for input, painting, reading or teardown. A
 20-worker barrier test and full-history fixture pass. Exact libc/kernel cause
 remains ❓; no speculative process-identity retry is retained. Split layout state
 is an explicitly owned GPUI entity so palette actions can resize after render.
+
+
+### In-app customization
+
+The supervisor handles customization preparation, review, apply, and Undo; views
+never read or write configuration files. A customization conversation is a normal
+Primary provider session with an initial prompt and a private working directory
+under Application Support/DevDesk/customization. It remains resumable through the
+existing session ledger. Provider permissions remain their ordinary permissions;
+proposal instructions are not an enforced write sandbox. Side sessions cannot use
+the new prompt launch request.
+
+Each draft snapshots config.toml and gives the agent current.toml, AGENTS.md, and
+instructions to write proposal.toml. The latest draft pointer survives relaunch.
+Review validates settings and project identity, and presents a line-membership
+change summary plus the full proposed configuration (the summary is not a
+positional diff). Apply rechecks both the exact reviewed proposal and original
+config, journals the last before/after text, then atomically replaces config.toml
+and publishes the usual Config event. Editor race checks are best effort, as with
+the existing config writers. Undo requires the current file to equal the last
+applied text and restores the original text, including comments. Configuration
+validation failures leave the live file unchanged.
+
+Config events update live terminal fonts, Option-as-Meta, application/terminal
+theme, and optional sidebar width. Process reconciliation retains existing
+restart semantics. Named terminal presets open shells through the same supervisor
+lifecycle and appear in the command palette. This feature introduces no plugin
+runtime, generated executable loading, or source self-modification.

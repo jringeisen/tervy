@@ -18,6 +18,33 @@ fn spawn(command: &str) -> (TerminalSession, devdesk_term::TerminalEvents) {
 }
 
 #[test]
+fn memory_samples_include_children_and_reject_reused_birth_identity() {
+    let (session, _events) = spawn("sleep 30 & printf 'READY\\n'; wait");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let members = session.owned.members().unwrap();
+        let leader = session.owned.leader.memory_footprint().unwrap();
+        let total = devdesk_term::kill::memory_footprints(&[session.owned_sessions()])[0];
+        if members.len() >= 2 && total.is_some_and(|bytes| bytes > leader) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "session memory did not include its child"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut stale = session.owned;
+    stale.leader.started_us += 1;
+    assert!(stale.leader.memory_footprint().is_none());
+    assert_eq!(
+        devdesk_term::kill::memory_footprints(&[vec![stale]]),
+        vec![None]
+    );
+    session.signal(libc::SIGKILL).unwrap();
+}
+
+#[test]
 fn final_output_is_drained_before_exit_and_grid_keeps_it() {
     let (session, events) = spawn("printf 'hello from PTY\\n'; exit 7");
     let deadline = Instant::now() + Duration::from_secs(5);

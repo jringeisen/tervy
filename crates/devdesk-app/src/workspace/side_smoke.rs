@@ -71,6 +71,24 @@ impl Workspace {
                 let right = this.tabs[&side].view.read(cx).bounds;
                 assert!(left.size.width > px(150.) && right.size.width > px(150.));
                 assert!(right.origin.x > left.origin.x);
+                // Compare actual native shaping metrics with the terminal's
+                // cell mask, rather than repeating the height calculation.
+                let terminal = this.tabs[&parent].view.read(cx);
+                let cell_height = terminal.metrics.height;
+                for (bold, italic) in [(false, false), (true, false), (false, true)] {
+                    let mut face = font(terminal.font_family.clone());
+                    face.features = FontFeatures::disable_ligatures();
+                    if bold { face = face.bold(); }
+                    if italic { face = face.italic(); }
+                    let text = "gyjpq";
+                    let line = window.text_system().shape_line(text.into(), px(terminal.font_size), &[TextRun {
+                        len: text.len(), font: face, color: black(), background_color: None,
+                        underline: None, strikethrough: None,
+                    }], None);
+                    assert!(cell_height >= line.ascent + line.descent + px(2.),
+                        "terminal cell clips native font: height={cell_height:?}, ascent={:?}, descent={:?}", line.ascent, line.descent);
+                }
+                eprintln!("devdesk-font-smoke PASS native_regular_bold_italic_fit=true cell_height_px={:.1}", f32::from(cell_height));
                 assert_eq!(this.project_tabs(), vec![parent]);
                 assert_eq!(this.visible_ids(), vec![parent, side]);
                 this.close_terminal(&CloseTerminal, window, cx);
@@ -82,8 +100,10 @@ impl Workspace {
                     let _ = weak.update(cx, |this, cx| {
                         let width = this.tabs[&parent].view.read(cx).bounds.size.width;
                         assert!(width > left.size.width * 1.5);
+                        this.error = Some("Select a running agent with a known session ID".into());
                         this.ask_agent_question(&AskAgentQuestion, window, cx);
                         assert_eq!(this.question_parent, Some(parent));
+                        assert!(this.error.is_none(), "successful question must clear an earlier error");
                         this.question_parent = None;
                         this.choose_tab(side, window, cx);
                         assert_eq!(this.visible_ids(), vec![parent, side]);
@@ -128,15 +148,15 @@ impl Workspace {
                                     let before = this.tabs[&target].view.read(cx).bounds.size.width;
                                     this.confirm_palette(PaletteAction::ResizeSide(50), window, cx);
                                     let resize_view = cx.weak_entity();
-                                    window.on_next_frame(move |_, cx| {
+                                    window.on_next_frame(move |window, cx| {
                                         let _ = resize_view.update(cx, |this, cx| {
                                             let after = this.tabs[&target].view.read(cx).bounds.size.width;
                                             assert!(after >= before + px(49.));
                                             eprintln!("devdesk-resize-smoke PASS side_before_px={:.1} side_after_px={:.1}", f32::from(before), f32::from(after));
-                                            cx.quit();
+                                            this.sidebar_smoke(window, cx);
                                         });
                                     });
-                                } else { this.keyboard_smoke(true, window, cx); }
+                                } else { this.question_shortcut_smoke(window, cx); }
                             });
                         });
                     });
@@ -147,4 +167,121 @@ impl Workspace {
         });
         window.refresh();
     }
+}
+
+impl Workspace {
+    fn question_shortcut_smoke(&self, window: &mut Window, cx: &Context<Self>) {
+        let weak = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            window.dispatch_keystroke(Keystroke::parse("cmd-shift-a").unwrap(), cx);
+            window.on_next_frame(move |window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    assert_eq!(this.question_parent, this.active());
+                    assert!(this.question_parent.is_some() && this.error.is_none());
+                    eprintln!("devdesk-question-shortcut-smoke PASS running_agent=true known_session=true cmd_shift_a_opens_question=true");
+                    this.close_terminal(&CloseTerminal, window, cx);
+                    this.keyboard_smoke(true, window, cx);
+                });
+            });
+        });
+        window.refresh();
+    }
+
+    /// Drive native pointer events across separate paints so the handle gets
+    /// the same down/move/up lifecycle as a real drag. Dispatch happens after
+    /// releasing the Workspace lease because input can synchronously redraw.
+    fn sidebar_smoke(&self, window: &mut Window, cx: &Context<Self>) {
+        let weak = cx.weak_entity();
+        let before = self.sidebar_state.read(cx).sizes()[0];
+        let x = self.tabs[&self.active().unwrap()]
+            .view
+            .read(cx)
+            .bounds
+            .origin
+            .x;
+        window.on_next_frame(move |window, cx| {
+            window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: point(before, px(300.)), pressed_button: None, modifiers: Default::default() }), cx);
+            window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent {
+                position: point(before, px(300.)), button: MouseButton::Left,
+                modifiers: Default::default(), click_count: 1, first_mouse: false,
+            }), cx);
+            window.on_next_frame(move |window, cx| {
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(before + px(60.), px(300.)),
+                    pressed_button: Some(MouseButton::Left), modifiers: Default::default(),
+                }), cx);
+                window.on_next_frame(move |window, cx| {
+                    // The first move starts GPUI's drag; a subsequent move
+                    // drives the panel after that state has been painted.
+                    window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent {
+                        position: point(before + px(60.), px(300.)),
+                        pressed_button: Some(MouseButton::Left), modifiers: Default::default(),
+                    }), cx);
+                    window.on_next_frame(move |window, cx| {
+                    window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent {
+                        position: point(before + px(60.), px(300.)), button: MouseButton::Left,
+                        modifiers: Default::default(), click_count: 1,
+                    }), cx);
+                    window.on_next_frame(move |window, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            let after = this.sidebar_state.read(cx).sizes()[0];
+                            assert!(after >= before + px(59.), "sidebar drag failed: {before:?} -> {after:?}");
+                            assert_eq!(this.sidebar_width, f32::from(after));
+                            let content_x = this.tabs[&this.active().unwrap()].view.read(cx).bounds.origin.x;
+                            assert!(content_x >= x + px(59.));
+                            this.confirm_palette(PaletteAction::ResizeSidebar(1000), window, cx);
+                            assert_eq!(this.sidebar_state.read(cx).sizes()[0], px(520.));
+                            this.confirm_palette(PaletteAction::ResizeSidebar(-1000), window, cx);
+                            assert_eq!(this.sidebar_state.read(cx).sizes()[0], px(220.));
+                            assert_eq!(this.sidebar_width, 220.);
+                            eprintln!("devdesk-sidebar-smoke PASS pointer_drag=true terminal_layout_updated=true remembered_width=true keyboard_resize=true range=220..520");
+                            this.appearance_smoke(window, cx);
+                        });
+                    });
+                    });
+                });
+            });
+        });
+        window.refresh();
+    }
+
+    /// Toggle the component theme without changing the user's macOS settings.
+    /// Waiting for a frame lets every terminal's global observer update before
+    /// checking palettes, including terminals that are currently hidden.
+    fn appearance_smoke(&self, window: &mut Window, cx: &Context<Self>) {
+        use gpui_kit::component::{Theme, ThemeMode};
+        let weak = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            Theme::change(ThemeMode::Light, Some(window), cx);
+            crate::theme::apply_palette(cx);
+            window.on_next_frame(move |window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    let expected = devdesk_term::snapshot::Palette::light();
+                    assert_eq!(cx.theme().background, terminal_surface(&expected));
+                    for tab in this.tabs.values() {
+                        assert!(tab.view.read(cx).palette == expected);
+                    }
+                });
+                Theme::change(ThemeMode::Dark, Some(window), cx);
+                crate::theme::apply_palette(cx);
+                window.on_next_frame(move |_, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        let expected = devdesk_term::snapshot::Palette::default();
+                        assert_eq!(cx.theme().background, terminal_surface(&expected));
+                        for tab in this.tabs.values() {
+                            assert!(tab.view.read(cx).palette == expected);
+                        }
+                        eprintln!("devdesk-appearance-smoke PASS light_then_dark=true visible_and_hidden_terminal_palettes=true");
+                        cx.quit();
+                    });
+                });
+            });
+        });
+        window.refresh();
+    }
+}
+
+fn terminal_surface(palette: &devdesk_term::snapshot::Palette) -> Hsla {
+    let color = palette.background;
+    rgb((u32::from(color.r) << 16) | (u32::from(color.g) << 8) | u32::from(color.b)).into()
 }

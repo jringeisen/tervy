@@ -52,6 +52,14 @@ pub enum Command {
         picker: bool,
         provider: agent::Provider,
     },
+    Customize {
+        project: String,
+        provider: agent::Provider,
+        request: String,
+    },
+    ReviewCustomization,
+    ApplyCustomization(String),
+    UndoCustomization,
     ResumeAgent(SessionId),
     ForkAgent {
         parent: SessionId,
@@ -80,6 +88,10 @@ pub enum Command {
     RemoveProject(String),
     SaveLayout(layout::Layout),
     Restore,
+    NewTerminalPreset {
+        project: String,
+        name: String,
+    },
     NewShell {
         project: String,
         size: Dimensions,
@@ -103,19 +115,36 @@ pub enum Command {
         name: String,
     },
     AddProject(PathBuf),
+    AddProcess {
+        project: String,
+        name: String,
+        command: String,
+    },
     ReloadConfig,
     Shutdown,
 }
 pub enum CoreEvent {
+    /// Approximate physical footprint of the session process tree, in bytes.
+    /// Launch identity prevents delayed samples from attaching to a restart.
+    MemoryUsage(Vec<(SessionId, LaunchId, Option<u64>)>),
     Restored {
         saved: bool,
         layout: layout::Layout,
         keys: BTreeMap<String, SessionId>,
     },
     Orphans(Vec<Orphan>),
+    CustomizationPreview(crate::customization::Preview),
+    CustomizationApplied {
+        undone: bool,
+    },
     Config(Config),
     ConfigError(String),
     ProjectAdded(String),
+    ProcessAdded(String),
+    ProcessAddFailed {
+        project: String,
+        error: String,
+    },
     ProjectRemoved(String),
     SessionChanged(SessionInfo),
     SessionStarted {
@@ -200,6 +229,7 @@ impl Drop for Supervisor {
 }
 
 enum Message {
+    MemorySampled(Vec<(SessionId, LaunchId, Option<u64>)>),
     HooksReady,
     Reaped {
         id: SessionId,
@@ -311,6 +341,8 @@ struct Entry {
     exited: bool,
 }
 struct Actor {
+    memory_due: Option<Duration>,
+    memory_sampling: bool,
     // Removal is permanent metadata deletion; close alone only dismisses a tab.
     helper: Option<PathBuf>,
     removing: BTreeSet<SessionId>,
@@ -346,6 +378,8 @@ impl Actor {
         events: async_channel::Sender<CoreEvent>,
     ) -> Self {
         Self {
+            memory_due: None,
+            memory_sampling: false,
             helper: None,
             removing: BTreeSet::new(),
             hooks: None,
@@ -511,6 +545,7 @@ impl Actor {
                         .filter_map(|entry| entry.agent.as_ref().and_then(|agent| agent.decay_at)),
                 )
                 .chain(self.codex_scan_at)
+                .chain(self.memory_due)
                 .chain(self.orphan_check_at)
                 .chain(self.config_due)
                 .chain(self.layout_due)
@@ -531,6 +566,7 @@ impl Actor {
                 self.message(message);
             }
             self.timers();
+            self.sample_memory();
             if self.shutdown_deadline.is_some()
                 && self.entries.is_empty()
                 && self.orphan_check_at.is_none()
@@ -555,6 +591,19 @@ impl Actor {
     }
     fn message(&mut self, message: Message) {
         match message {
+            Message::MemorySampled(samples) => {
+                self.memory_sampling = false;
+                self.memory_due = Some(self.clock.now() + Duration::from_secs(5));
+                let samples = samples
+                    .into_iter()
+                    .filter(|(id, launch, _)| {
+                        self.entries.get(id).is_some_and(|entry| {
+                            entry.info.launch == *launch && entry.session.is_some() && !entry.exited
+                        })
+                    })
+                    .collect();
+                self.emit(CoreEvent::MemoryUsage(samples));
+            }
             Message::HooksReady => self.hook_messages(),
             Message::Reaped { id, launch, result } => {
                 if !self
@@ -732,6 +781,54 @@ impl Actor {
             }
         }
     }
+    /// The actor copies ownership identities; all process enumeration and
+    /// memory syscalls run on one worker. Empty workspaces have no sampler
+    /// timer, and at most one batch can be in flight during a slow OS query.
+    fn sample_memory(&mut self) {
+        if self.shutdown_deadline.is_some()
+            || !self
+                .entries
+                .values()
+                .any(|entry| entry.session.is_some() && !entry.exited)
+        {
+            self.memory_due = None;
+            return;
+        }
+        if self.memory_sampling {
+            return;
+        }
+        let now = self.clock.now();
+        if self.memory_due.is_some_and(|due| due > now) {
+            return;
+        }
+        let roots: Vec<_> = self
+            .entries
+            .values()
+            .filter_map(|entry| {
+                if entry.exited {
+                    return None;
+                }
+                let session = entry.session.as_ref()?;
+                Some((entry.info.id, entry.info.launch, session.owned_sessions()))
+            })
+            .collect();
+        self.memory_due = None;
+        self.memory_sampling = true;
+        let sender = self.sender.clone();
+        std::thread::spawn(move || {
+            let groups: Vec<_> = roots
+                .iter()
+                .map(|(_, _, sessions)| sessions.clone())
+                .collect();
+            let totals = devdesk_term::kill::memory_footprints(&groups);
+            let samples = roots
+                .into_iter()
+                .zip(totals)
+                .map(|((id, launch, _), bytes)| (id, launch, bytes))
+                .collect();
+            let _ = sender.send(Message::MemorySampled(samples));
+        });
+    }
     fn command(&mut self, command: Command) {
         if self.shutdown_deadline.is_some() && !matches!(command, Command::Shutdown) {
             return;
@@ -741,16 +838,59 @@ impl Actor {
                 project,
                 picker,
                 provider,
-            } => self.new_agent(project, picker, provider),
+            } => self.new_agent(project, picker, provider, None),
+            Command::Customize {
+                project,
+                provider,
+                request,
+            } => {
+                self.new_agent(project, false, provider, Some(request));
+            }
+            Command::ReviewCustomization => match crate::customization::Draft::review(&self.path) {
+                Ok(proposal) => self.emit(CoreEvent::CustomizationPreview(proposal)),
+                Err(error) => self.emit(CoreEvent::ConfigError(error)),
+            },
+            Command::ApplyCustomization(proposal) => {
+                match crate::customization::Draft::apply(&self.path, &proposal) {
+                    Ok(config) => {
+                        self.config = config;
+                        self.emit(CoreEvent::Config(self.config.clone()));
+                        self.sync_processes();
+                        self.emit(CoreEvent::CustomizationApplied { undone: false });
+                    }
+                    Err(error) => self.emit(CoreEvent::ConfigError(error)),
+                }
+            }
+            Command::UndoCustomization => match crate::customization::Draft::undo(&self.path) {
+                Ok(config) => {
+                    self.config = config;
+                    self.emit(CoreEvent::Config(self.config.clone()));
+                    self.sync_processes();
+                    self.emit(CoreEvent::CustomizationApplied { undone: true });
+                }
+                Err(error) => self.emit(CoreEvent::ConfigError(error)),
+            },
             Command::AgentInput { id, launch, enter } => self.agent_input(id, launch, Some(enter)),
             Command::AgentBell { id, launch } => self.agent_input(id, launch, None),
             Command::AgentTitle { id, launch, title } => {
-                if let Some(entry) = self.entries.get_mut(&id)
-                    && entry.info.launch == launch
-                    && let Some(runtime) = &mut entry.agent
-                    && runtime.info.record.provider == agent::Provider::Codex
-                {
-                    runtime.observe_title(&title);
+                let completed = self.entries.get_mut(&id).and_then(|entry| {
+                    if entry.info.launch != launch || entry.exited || self.removing.contains(&id) {
+                        return None;
+                    }
+                    let runtime = entry.agent.as_mut()?;
+                    runtime
+                        .observe_title(&title)
+                        .then(|| runtime.info.record.clone())
+                });
+                if let Some(record) = completed {
+                    if let Some(store) = &self.store
+                        && let Err(error) = store.save_agent(&record)
+                    {
+                        self.emit(CoreEvent::ConfigError(error));
+                    }
+                    self.track_codex_descendants(id);
+                    self.arm_codex_scan();
+                    self.changed(id);
                 }
             }
             Command::AgentExitSummary {
@@ -857,45 +997,35 @@ impl Actor {
                 }
                 Err(error) => self.emit(CoreEvent::ConfigError(error)),
             },
-            Command::NewShell { project, size } => {
-                if !self.config.projects.iter().any(|item| item.id == project) {
-                    self.emit(CoreEvent::ConfigError(
-                        "Choose an existing project before opening a terminal".into(),
-                    ));
-                    return;
+            Command::AddProcess {
+                project,
+                name,
+                command,
+            } => match config::append_process(&self.path, &project, &name, &command) {
+                Ok(config) => {
+                    self.config = config;
+                    self.emit(CoreEvent::Config(self.config.clone()));
+                    self.sync_processes();
+                    self.emit(CoreEvent::ProcessAdded(project));
                 }
-                let id = SessionId(self.next_id);
-                self.next_id += 1;
-                self.entries.insert(
-                    id,
-                    Entry {
-                        agent: None,
-                        cwd: None,
-                        process: None,
-                        desired: None,
-                        history: None,
-                        joining: false,
-                        info: SessionInfo {
-                            agent: None,
-                            process: None,
-                            config_changed: false,
-                            pid: None,
-                            id,
-                            launch: LaunchId(0),
-                            project,
-                            name: format!("Terminal {}", id.0),
-                            status: SessionStatus::Starting,
-                        },
-                        session: None,
-                        size,
-                        stopping: None,
-                        close: false,
-                        restart: false,
-                        drained: false,
-                        exited: false,
-                    },
-                );
-                self.spawn(id);
+                Err(error) => self.emit(CoreEvent::ProcessAddFailed { project, error }),
+            },
+            Command::NewShell { project, size } => self.new_shell(project, size, None),
+            Command::NewTerminalPreset { project, name } => {
+                let preset = self
+                    .config
+                    .projects
+                    .iter()
+                    .find(|p| p.id == project)
+                    .and_then(|p| p.terminals.iter().find(|t| t.name == name))
+                    .cloned();
+                if let Some(preset) = preset {
+                    self.new_shell(project, Dimensions::default(), Some(preset));
+                } else {
+                    self.emit(CoreEvent::ConfigError(
+                        "Terminal preset is no longer configured".into(),
+                    ));
+                }
             }
             Command::Rename { id, name } => {
                 let name: String = name
@@ -1467,7 +1597,60 @@ impl Actor {
         }
         self.emit(CoreEvent::ProjectRemoved(project));
     }
-    fn new_agent(&mut self, project: String, picker: bool, provider: agent::Provider) {
+    fn new_shell(
+        &mut self,
+        project: String,
+        size: Dimensions,
+        preset: Option<config::TerminalSpec>,
+    ) {
+        if !self.config.projects.iter().any(|item| item.id == project) {
+            self.emit(CoreEvent::ConfigError(
+                "Choose an existing project before opening a terminal".into(),
+            ));
+            return;
+        }
+        let id = SessionId(self.next_id);
+        self.next_id += 1;
+        self.entries.insert(
+            id,
+            Entry {
+                agent: None,
+                cwd: preset.as_ref().and_then(|p| p.cwd.clone()),
+                process: None,
+                desired: None,
+                history: None,
+                joining: false,
+                info: SessionInfo {
+                    agent: None,
+                    process: None,
+                    config_changed: false,
+                    pid: None,
+                    id,
+                    launch: LaunchId(0),
+                    project,
+                    name: preset
+                        .map(|p| p.name)
+                        .unwrap_or_else(|| format!("Terminal {}", id.0)),
+                    status: SessionStatus::Starting,
+                },
+                session: None,
+                size,
+                stopping: None,
+                close: false,
+                restart: false,
+                drained: false,
+                exited: false,
+            },
+        );
+        self.spawn(id);
+    }
+    fn new_agent(
+        &mut self,
+        project: String,
+        picker: bool,
+        provider: agent::Provider,
+        customization: Option<String>,
+    ) {
         if self.recovery_pending || self.orphan_check_at.is_some() {
             self.emit(CoreEvent::ConfigError(
                 "Resolve previous sessions before launching an agent".into(),
@@ -1482,15 +1665,30 @@ impl Actor {
         else {
             return;
         };
+        let customization = match customization {
+            Some(request) => match crate::customization::Draft::prepare(&self.path, &request) {
+                Ok(draft) => Some(draft),
+                Err(error) => {
+                    self.emit(CoreEvent::ConfigError(error));
+                    return;
+                }
+            },
+            None => None,
+        };
         let record = agent::Record {
             id: uuid::Uuid::new_v4().to_string(),
             project: project.id.clone(),
-            name: if picker {
+            name: if customization.is_some() {
+                format!("Customize DevDesk · {}", provider.label())
+            } else if picker {
                 format!("{} · choose session", provider.label())
             } else {
                 provider.label().into()
             },
-            cwd: project.path.clone(),
+            cwd: customization
+                .as_ref()
+                .map(|(cwd, _)| cwd.clone())
+                .unwrap_or_else(|| project.path.clone()),
             role: agent::Role::Primary,
             provider,
             parent: None,
@@ -1509,7 +1707,9 @@ impl Actor {
         }
         let id = self.agent_entry(
             record,
-            if picker {
+            if let Some((_, prompt)) = customization {
+                agent::Request::Prompt(prompt)
+            } else if picker {
                 agent::Request::ResumePicker
             } else {
                 agent::Request::New
@@ -2528,5 +2728,61 @@ mod tests {
             SessionStatus::Stopping
         ));
         assert!(actor.entries[&SessionId(1)].close);
+    }
+    #[test]
+    fn codex_title_after_notify_persists_identity_and_updates_the_ui() {
+        let (sender, _) = mpsc::channel();
+        let (events, receiver) = async_channel::unbounded();
+        let mut actor = Actor::new(PathBuf::new(), None, sender, events);
+        actor.store = Some(Store::open(std::path::Path::new(":memory:")).unwrap());
+        let record = agent::Record {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: "p".into(),
+            name: "Codex".into(),
+            cwd: PathBuf::from("/tmp"),
+            role: agent::Role::Primary,
+            provider: agent::Provider::Codex,
+            parent: None,
+            snapshot_at: None,
+            session_id: None,
+        };
+        let id = actor.agent_entry(record.clone(), agent::Request::New);
+        let entry = actor.entries.get_mut(&id).unwrap();
+        entry.info.launch = LaunchId(9);
+        entry.info.status = SessionStatus::Running;
+        entry.exited = false;
+        let token = entry.agent.as_ref().unwrap().token.clone();
+        let thread = "20000000-0000-4000-8000-000000000002";
+        actor.hook(ipc::HookEvent {
+            agent_id: record.id,
+            launch: 9,
+            token,
+            event: "agent-turn-complete".into(),
+            session_id: Some(thread.into()),
+            ..Default::default()
+        });
+        while receiver.try_recv().is_ok() {}
+        let title = "20000000-0000-4000-8000-0000000...";
+        actor.command(Command::AgentTitle {
+            id,
+            launch: LaunchId(8),
+            title: title.into(),
+        });
+        assert!(receiver.is_empty());
+        assert!(actor.store.as_ref().unwrap().agents().unwrap().is_empty());
+        actor.command(Command::AgentTitle {
+            id,
+            launch: LaunchId(9),
+            title: title.into(),
+        });
+        let saved = actor.store.as_ref().unwrap().agents().unwrap();
+        assert_eq!(saved[0].session_id.as_deref(), Some(thread));
+        let CoreEvent::SessionChanged(info) = receiver.try_recv().unwrap() else {
+            panic!("missing UI update")
+        };
+        assert_eq!(info.status, SessionStatus::Running);
+        let agent = info.agent.unwrap();
+        assert_eq!(agent.status, agent::Status::Idle);
+        assert_eq!(agent.record.session_id.as_deref(), Some(thread));
     }
 }

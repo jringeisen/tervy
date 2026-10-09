@@ -20,6 +20,9 @@ pub struct Settings {
     pub font_family: String,
     pub font_size: f32,
     pub option_as_meta: bool,
+    /// system, dark, light, or warm-dark.
+    pub theme: String,
+    pub sidebar_width: Option<f32>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -28,6 +31,8 @@ impl Default for Settings {
             font_family: "Menlo".into(),
             font_size: 14.,
             option_as_meta: false,
+            theme: "system".into(),
+            sidebar_width: None,
         }
     }
 }
@@ -120,6 +125,16 @@ pub fn parse(text: &str, home: &Path) -> Result<Config, String> {
     {
         return Err("font_size must be 8–32 and font_family must not be empty".into());
     }
+    if !["system", "dark", "light", "warm-dark"].contains(&config.settings.theme.as_str()) {
+        return Err("settings.theme must be system, dark, light, or warm-dark".into());
+    }
+    if config
+        .settings
+        .sidebar_width
+        .is_some_and(|width| !(220. ..=520.).contains(&width))
+    {
+        return Err("settings.sidebar_width must be 220–520".into());
+    }
     let mut ids = HashSet::new();
     for project in &mut config.projects {
         if !slug(&project.id) || !ids.insert(project.id.clone()) {
@@ -180,6 +195,30 @@ pub fn parse(text: &str, home: &Path) -> Result<Config, String> {
                 if key.is_empty() || key.contains(['=', '\0']) {
                     return Err(format!("Process '{}': invalid environment key", process.id));
                 }
+            }
+        }
+        let mut terminal_names = HashSet::new();
+        for terminal in &mut project.terminals {
+            if terminal.name.trim().is_empty() || !terminal_names.insert(terminal.name.clone()) {
+                return Err(format!(
+                    "Project '{}': terminal preset names must be nonempty and unique",
+                    project.name
+                ));
+            }
+            if let Some(cwd) = &terminal.cwd {
+                let expanded = expand(cwd, home);
+                let expanded = if expanded.is_absolute() {
+                    expanded
+                } else {
+                    project.path.join(expanded)
+                };
+                if !expanded.is_dir() {
+                    return Err(format!(
+                        "Terminal preset '{}': folder does not exist",
+                        terminal.name
+                    ));
+                }
+                terminal.cwd = Some(expanded);
             }
         }
         if project
@@ -315,6 +354,100 @@ pub fn append_project(path: &Path, folder: &Path) -> Result<(Config, String), St
     }
     result?;
     Ok((config, id))
+}
+
+/// Append a stopped process to a fresh on-disk snapshot, preserving comments.
+pub fn append_process(
+    path: &Path,
+    project: &str,
+    name: &str,
+    command: &str,
+) -> Result<Config, String> {
+    let name = name.trim();
+    let command = command.trim();
+    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+        return Err("Enter a process name (1–100 characters)".into());
+    }
+    if command.is_empty() || command.len() > 8192 || command.contains('\0') {
+        return Err("Enter a command (up to 8 KiB)".into());
+    }
+    let original = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let current = parse(&original, &home)?;
+    let configured = current
+        .projects
+        .iter()
+        .find(|item| item.id == project)
+        .ok_or("Project is no longer configured")?;
+    let base: String = name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    let base = base.trim_matches('-');
+    let base: String = if base.is_empty() { "process" } else { base }
+        .chars()
+        .take(80)
+        .collect();
+    let mut id = base.clone();
+    let mut suffix = 2;
+    while configured.processes.iter().any(|process| process.id == id) {
+        id = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    let mut document: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|error: toml_edit::TomlError| error.to_string())?;
+    let table = document
+        .get_mut("projects")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|projects| {
+            projects
+                .iter_mut()
+                .find(|item| item.get("id").and_then(toml_edit::Item::as_str) == Some(project))
+        })
+        .ok_or("projects must use [[projects]] tables")?;
+    if table.get("processes").is_none() {
+        table["processes"] = toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new());
+    }
+    let processes = table["processes"]
+        .as_array_of_tables_mut()
+        .ok_or("processes must use [[projects.processes]] tables")?;
+    let mut process = toml_edit::Table::new();
+    process["id"] = toml_edit::value(id);
+    process["name"] = toml_edit::value(name);
+    process["command"] = toml_edit::value(command);
+    process["autostart"] = toml_edit::value(false);
+    processes.push(process);
+    let output = document.to_string();
+    let config = parse(&output, &home)?;
+    let temporary = path.with_file_name(format!(".add-process-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        file.write_all(output.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|error| error.to_string())?;
+        // Best-effort editor race check, matching the other config mutations.
+        if std::fs::read_to_string(path).map_err(|error| error.to_string())? != original {
+            return Err("config.toml changed while adding the process; try again".into());
+        }
+        std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result?;
+    Ok(config)
 }
 
 /// Remove only a DevDesk configuration entry; project files are never touched.
