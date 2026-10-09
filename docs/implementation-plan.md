@@ -1,6 +1,6 @@
 # DevDesk — Implementation Plan
 
-Status: **Approved; implementing milestones with owner review.** M0–M4 are owner approved; M5–M7 proceed under the owner's autonomous implementation/validation/commit authorization (2026-10-08).
+Status: **Approved; M0–M7 implementation complete.** M0–M4 are owner approved; M5–M7 proceed under the owner's autonomous implementation/validation/commit authorization (2026-10-08).
 
 Sizing: **S** ≈ under a day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks of focused, Claude-assisted work with owner review. These are relative sizes for ordering and risk, not commitments.
 
@@ -251,6 +251,15 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 | 7.5 | Unsigned `.app` bundle script (stable helper path for hooks; `Info.plist`; icon) | S |
 | 7.6 | Commit `perf/baseline.json` and the comparison script | S |
 | 7.7 | Keyboard-only pass: every action reachable without a mouse | S |
+
+🧪 **M7 implementation review (2026-10-09):** Tasks 7.1–7.7 are implemented
+and validated under autonomous owner authorization. [Final review](m7-review.md)
+and `perf/baseline.json` record the quality gate, native keyboard/bundle probes,
+crash recovery and measured budgets. Twenty noisy terminals meet frame/input
+budgets; A8 retains one reader per PTY. A11's visible idle CPU, empty-window
+memory and first-trial startup budgets remain explicit misses. `powermetrics`
+requires a password, so zero timer wakeups are supported by source inspection,
+not claimed as measured attribution. No absent-owner visual review is claimed.
 
 ---
 

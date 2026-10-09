@@ -3,6 +3,7 @@ mod badge;
 mod composition;
 mod logging;
 mod m2_perf;
+mod panic_reporter;
 mod perf;
 mod terminal_element;
 mod terminal_perf;
@@ -30,6 +31,49 @@ fn main() {
     }
     let perf = perf::StartupTimer::from_env();
     logging::init();
+    let panics = panic_reporter::PanicReporter::install();
+    if arguments.get(1).map(String::as_str) == Some("--panic-probe") {
+        // Explicit diagnostic command: isolated configuration, no native window.
+        // Never selected through normal app startup or hook invocations.
+        let path = std::path::PathBuf::from(arguments.get(2).expect("probe config path"));
+        let runtime = Supervisor::start(path.clone(), None).expect("probe supervisor");
+        panics.connect(runtime.handle.clone());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        loop {
+            if let Ok(event) = runtime.events.try_recv() {
+                match event {
+                    devdesk_core::supervisor::CoreEvent::SessionChanged(info)
+                        if info.process.is_some()
+                            && info.status == devdesk_core::supervisor::SessionStatus::Stopped =>
+                    {
+                        runtime
+                            .handle
+                            .send(devdesk_core::supervisor::Command::Start(info.id))
+                    }
+                    devdesk_core::supervisor::CoreEvent::SessionStarted { info, .. } => {
+                        let owned =
+                            devdesk_term::kill::OwnedSession::capture(info.pid.expect("probe pid"))
+                                .expect("probe identity");
+                        eprintln!(
+                            "panic-probe sid={} started_us={}",
+                            owned.leader.pid, owned.leader.started_us
+                        );
+                        while !path.parent().unwrap().join("ready").exists() {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "probe child ready timeout"
+                            );
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+                        }
+                        panic!("PRIVATE_PROBE_PAYLOAD");
+                    }
+                    _ => {}
+                }
+            }
+            assert!(std::time::Instant::now() < deadline, "probe timed out");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "DevDesk starting");
     let path = config::support_directory();
     // Benchmark windows use an in-memory project and do not contend with the
@@ -56,6 +100,7 @@ fn main() {
             return;
         }
     };
+    panics.connect(runtime.handle.clone());
     let core = runtime.handle.clone();
     let events = runtime.events.clone();
     let activation = instance.as_ref().map(|(_, receiver)| receiver.clone());

@@ -1,6 +1,6 @@
 # DevDesk — Architecture
 
-Status: **Proposed** (awaiting approval). Companion documents: [technical-research.md](technical-research.md) (evidence), [decisions.md](decisions.md) (ADRs), [agent-integration.md](agent-integration.md), [implementation-plan.md](implementation-plan.md), [open-questions.md](open-questions.md).
+Status: **Accepted; implemented through M7.** Companion documents: [technical-research.md](technical-research.md) (evidence), [decisions.md](decisions.md) (ADRs), [agent-integration.md](agent-integration.md), [implementation-plan.md](implementation-plan.md), [open-questions.md](open-questions.md).
 
 ---
 
@@ -187,12 +187,12 @@ pub struct AgentRecord {                   // persisted in SQLite
 |---|---|---|---|
 | **Main (GPUI)** | 1 | Input, layout, paint, UI mirror updates | Block on a channel, do I/O, hold the Term lock while shaping |
 | **Supervisor** | 1 | Handles `Command`s, PTY lifecycle events, hook signals, timers (receive with deadline), SQLite writes | Touch GPUI, block on the UI |
-| **PTY EventLoop** | 1 per session | Reads the PTY (1 MiB buffer), parses into `Term` (takes the lock), sets the dirty flag, forwards events | Do anything slow while holding the lock |
+| **PTY EventLoop** | 1 per session | Reads the PTY (64 KiB buffer; attributed M7 patch), parses into `Term` (takes the lock), sets the dirty flag, forwards events | Do anything slow while holding the lock |
 | **IPC listener** | 1 | Accepts on `run/devdesk.sock`, reads one bounded JSON message per connection (250 ms deadline, ≤16 connections), forwards to the supervisor | Interpret messages |
 | **Config watcher** | 1 (`notify`) | Debounced file events → supervisor | — |
 | **Env resolver** | 1-shot | Runs `$SHELL -l -i -c 'env -0'` with a timeout at startup | — |
 
-At 20 terminals that is about 25 threads, which is fine on macOS. A shared `polling` reader is the documented escape hatch (assumption A8, tested in M7).
+🧪 M7 measures 27 app threads at 20 idle terminals and 31 under twenty noisy readers plus a quiet echo terminal. A shared `polling` reader is the documented escape hatch (assumption A8, tested in M7).
 
 ### Shared state and ownership
 
@@ -590,3 +590,24 @@ reparenting; completion waits for every tracked session. Surviving Codex orphans
 are expanded before termination. SDK operations remain off GPUI, and no PTY
 bytes/wakeups enter the actor. See [M6 review](m6-review.md) for tests and crash
 limitations; M7 remains the final hardening pass.
+
+
+M7 implementation evidence (🧪): Codex's actor-owned crash journal scans only
+active turns or tracked jobs, once a second; idle agents and shells introduce
+no scanning deadline. The journal retains birth identities after reparenting
+and removes them only after verified session emptiness. It is best effort:
+a job born and orphaned between scans can escape capture. Panic reporting
+uses a separate capped descriptor, logs source location without payload, and
+requests nonblocking Shutdown. Ordinary unwinding is tested; foreign callback
+abort and SIGKILL rely on SIGHUP and relaunch recovery. Alacritty readers retain
+64 KiB rather than 1 MiB buffers; the attributed patch passes noisy/flood tests.
+Native keyboard probes and the unsigned app bundle are covered in
+[M7 review](m7-review.md). A11's visible idle CPU and empty-window memory budgets
+remain missed; full history memory is reported separately.
+
+🧪 M7 also reproduces failures from concurrent macOS `openpty` allocation.
+A worker-only creation mutex serializes allocation/spawn before a Term lock or
+reader exists; it is never used for input, painting, reading or teardown. A
+20-worker barrier test and full-history fixture pass. Exact libc/kernel cause
+remains ❓; no speculative process-identity retry is retained. Split layout state
+is an explicitly owned GPUI entity so palette actions can resize after render.

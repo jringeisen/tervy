@@ -334,6 +334,7 @@ struct Actor {
     next_id: u64,
     next_launch: u64,
     config_due: Option<Duration>,
+    codex_scan_at: Option<Duration>,
     shutdown_deadline: Option<Duration>,
     watcher: Option<notify::RecommendedWatcher>,
 }
@@ -367,6 +368,7 @@ impl Actor {
             next_id: 1,
             next_launch: 1,
             config_due: None,
+            codex_scan_at: None,
             shutdown_deadline: None,
             watcher: None,
         }
@@ -508,6 +510,7 @@ impl Actor {
                         .values()
                         .filter_map(|entry| entry.agent.as_ref().and_then(|agent| agent.decay_at)),
                 )
+                .chain(self.codex_scan_at)
                 .chain(self.orphan_check_at)
                 .chain(self.config_due)
                 .chain(self.layout_due)
@@ -652,6 +655,7 @@ impl Actor {
                             }
                         }
                         entry.info.agent = entry.agent.as_ref().map(|runtime| runtime.info.clone());
+                        self.arm_codex_scan();
                         self.emit(CoreEvent::SessionStarted {
                             info: self.entries[&id].info.clone(),
                             handle,
@@ -1003,17 +1007,102 @@ impl Actor {
             }
         };
         let mut error = None;
+        // Also retry identities already held in memory: a prior SQLite error
+        // must not silently prevent later crash-journal persistence.
+        let mut identities = session.extra_sessions().to_vec();
         for owned in &discovered {
-            if let Some(store) = &self.store
-                && let Err(failure) = store.insert(*owned, entry.info.launch.0, &owner)
-            {
-                error = Some(failure);
+            if !identities.iter().any(|old| old.leader == owned.leader) {
+                identities.push(*owned);
+            }
+        }
+        for owned in identities {
+            if let Some(store) = &self.store {
+                match store.contains(owned) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        if let Err(failure) = store.insert(owned, entry.info.launch.0, &owner) {
+                            error = Some(failure);
+                        }
+                    }
+                    Err(failure) => error = Some(failure),
+                }
             }
         }
         session.track_sessions(discovered);
         if let Some(error) = error {
             self.emit(CoreEvent::ConfigError(error));
         }
+    }
+    fn codex_jobs_need_scan(&self) -> bool {
+        self.entries.values().any(|entry| {
+            entry.stopping.is_none()
+                && entry.session.is_some()
+                && entry.agent.as_ref().is_some_and(|runtime| {
+                    runtime.info.record.provider == agent::Provider::Codex
+                        && (runtime.decay_at.is_some()
+                            || entry
+                                .session
+                                .as_ref()
+                                .is_some_and(|session| !session.extra_sessions().is_empty()))
+                })
+        })
+    }
+    fn arm_codex_scan(&mut self) {
+        if !self.codex_jobs_need_scan() {
+            self.codex_scan_at = None;
+        } else if self.codex_scan_at.is_none() {
+            self.codex_scan_at = Some(self.clock.now() + Duration::from_secs(1));
+        }
+    }
+    /// Best-effort crash journal while a Codex turn or background job is live.
+    /// There is no scan deadline with idle agents and no tracked jobs. A process
+    /// born and orphaned between scans remains an explicitly documented gap.
+    fn scan_codex_jobs(&mut self, now: Duration) {
+        if !self.codex_scan_at.is_some_and(|deadline| now >= deadline) {
+            return;
+        }
+        let ids: Vec<_> =
+            self.entries
+                .iter()
+                .filter(|(_, entry)| {
+                    entry.stopping.is_none()
+                        && entry.session.is_some()
+                        && entry.agent.as_ref().is_some_and(|runtime| {
+                            runtime.info.record.provider == agent::Provider::Codex
+                                && (runtime.decay_at.is_some()
+                                    || entry.session.as_ref().is_some_and(|session| {
+                                        !session.extra_sessions().is_empty()
+                                    }))
+                        })
+                })
+                .map(|(id, _)| *id)
+                .collect();
+        let mut prune_error = None;
+        for id in ids {
+            self.track_codex_descendants(id);
+            let session = self.entries.get_mut(&id).unwrap().session.as_mut().unwrap();
+            let expired: Vec<_> = session
+                .extra_sessions()
+                .iter()
+                .copied()
+                .filter(|owned| owned.members().is_ok_and(|members| members.is_empty()))
+                .collect();
+            for owned in expired {
+                if let Some(store) = &self.store
+                    && let Err(error) = store.remove(owned)
+                {
+                    prune_error = Some(error);
+                    continue;
+                }
+                session.forget_session(owned.leader);
+            }
+        }
+        if let Some(error) = prune_error {
+            self.emit(CoreEvent::ConfigError(error));
+        }
+        self.codex_scan_at = self
+            .codex_jobs_need_scan()
+            .then_some(now + Duration::from_secs(1));
     }
     fn stop(&mut self, id: SessionId, close: bool, restart: bool) {
         if self.entries.contains_key(&id) {
@@ -1151,7 +1240,11 @@ impl Actor {
                 let result = (|| {
                     let (program, args) = probe_command(
                         if probe.as_deref() == Some("many") {
-                            Some(if id.0 == 11 { "echo" } else { "yes" })
+                            Some(if id.0 == crate::perf::noisy_count() as u64 + 1 {
+                                "echo"
+                            } else {
+                                "yes"
+                            })
                         } else {
                             probe.as_deref()
                         },
@@ -1566,6 +1659,7 @@ impl Actor {
         if previous != runtime.info.status {
             self.changed(id);
         }
+        self.arm_codex_scan();
     }
     fn agent_exit_summary(&mut self, id: SessionId, launch: LaunchId, session_id: String) {
         if uuid::Uuid::parse_str(&session_id).is_err() || self.removing.contains(&id) {
@@ -1688,6 +1782,10 @@ impl Actor {
         }
         let previous = runtime.info.record.session_id.clone();
         runtime.apply(&event);
+        let capture_jobs = runtime.info.record.provider == agent::Provider::Codex
+            && event.event == "agent-turn-complete"
+            && event.session_id.is_some()
+            && event.session_id == runtime.info.record.session_id;
         let record =
             (previous != runtime.info.record.session_id).then(|| runtime.info.record.clone());
         if let (Some(store), Some(record)) = (&self.store, record)
@@ -1695,6 +1793,10 @@ impl Actor {
         {
             self.emit(CoreEvent::ConfigError(error));
         }
+        if capture_jobs {
+            self.track_codex_descendants(id);
+        }
+        self.arm_codex_scan();
         self.changed(id);
     }
     fn restore(&mut self) {
@@ -2058,6 +2160,7 @@ impl Actor {
     fn timers(&mut self) {
         self.decay_agents();
         let now = self.clock.now();
+        self.scan_codex_jobs(now);
         if self.layout_due.is_some_and(|deadline| now >= deadline) {
             self.flush_layout();
         }
@@ -2149,6 +2252,7 @@ fn probe_command(
     environment: &ShellEnvironment,
 ) -> Result<(String, Vec<String>), String> {
     Ok(match probe {
+        Some("scrollback") => ("/usr/bin/python3".into(), vec!["-u".into(), "-c".into(), "import os,signal; data=(b'x'*99+b'\\r\\n' )*5300;\nwhile data:\n n=os.write(1,data); data=data[n:]\nwhile True: signal.pause()".into()]),
         Some("yes") => ("/usr/bin/yes".into(), vec![]),
         Some("echo") => ("/usr/bin/python3".into(), vec!["-u".into(), "-c".into(), "import os,tty; tty.setraw(0); os.write(1,b'READY\\r\\n');\nwhile True:\n data=os.read(0,4096)\n if not data: break\n os.write(1,data)".into()]),
         Some("flood") => ("/bin/zsh".into(), vec!["-c".into(), "cat /private/tmp/devdesk-perf-flood.txt; printf '\\nFLOOD_DONE\\n'; read -r line; printf 'ECHO:%s\\n' \"$line\"; sleep 5".into()]),

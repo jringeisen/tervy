@@ -17,3 +17,5 @@ pub mod ipc;
 pub mod layout;
 
 pub mod codex;
+
+pub mod perf;

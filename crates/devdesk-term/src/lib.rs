@@ -10,7 +10,7 @@ pub mod snapshot;
 pub mod terminal;
 
 pub use alacritty_terminal::event::Event;
-pub use alacritty_terminal::grid::Scroll;
+pub use alacritty_terminal::grid::{Dimensions as GridDimensions, Scroll};
 pub use alacritty_terminal::index::{Column, Line, Point, Side};
 pub use alacritty_terminal::selection::{Selection, SelectionType};
 pub use alacritty_terminal::term::TermMode;

@@ -10,7 +10,7 @@ use devdesk_core::{agent, layout};
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::resizable::{h_resizable, resizable_panel};
+use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
@@ -68,6 +68,15 @@ enum PaletteAction {
     LaunchAgent(agent::Provider, bool),
     ResumeAgent(SessionId),
     Ask,
+    Remove(RemovalTarget),
+    Select(SessionId),
+    FocusPrimary,
+    FocusSide,
+    Reload,
+    Quit,
+    ToggleProject(String),
+    ResizeSide(i32),
+    OpenUrl(String),
 }
 
 pub struct Workspace {
@@ -95,6 +104,7 @@ pub struct Workspace {
     rename: Option<SessionId>,
     question_parent: Option<SessionId>,
     /// Only the UI owns split presentation; each PTY remains actor-owned.
+    split_states: BTreeMap<SessionId, Entity<ResizableState>>,
     side_panes: BTreeMap<SessionId, SessionId>,
     side_focus: Option<SessionId>,
     rename_input: Entity<InputState>,
@@ -143,6 +153,37 @@ impl Workspace {
                     this.smoke_side(window, cx);
                     return;
                 }
+                if matches!(this.perf_layout.as_str(), "idle20" | "scrollback20") {
+                    this.active_project = Some("probe".into());
+                    for _ in 0..20 {
+                        this.core.send(CoreCommand::NewShell {
+                            project: "probe".into(),
+                            size: devdesk_term::Dimensions::default(),
+                        });
+                    }
+                    let timer = cx
+                        .background_executor()
+                        .timer(std::time::Duration::from_secs(5));
+                    this._tasks.push(cx.spawn(async move |view, cx| {
+                        timer.await;
+                        let _ = view.update(cx, |this, cx| {
+                            use devdesk_term::GridDimensions as _;
+                            let mut rows = Vec::new();
+                            for tab in this.tabs.values() {
+                                if let Some(session) = &tab.view.read(cx).session {
+                                    let term = session.handle.term.lock();
+                                    rows.push((
+                                        term.columns(),
+                                        term.screen_lines(),
+                                        term.grid().history_size(),
+                                    ));
+                                }
+                            }
+                            eprintln!("devdesk-idle-grids {:?}", rows);
+                        });
+                    }));
+                    return;
+                }
                 if this.stress.is_some() {
                     this.start_stress();
                     return;
@@ -182,6 +223,7 @@ impl Workspace {
             palette_query: String::new(),
             rename: None,
             question_parent: None,
+            split_states: BTreeMap::new(),
             side_panes: BTreeMap::new(),
             side_focus: None,
             rename_input,
@@ -194,7 +236,7 @@ impl Workspace {
     fn empty_control(&self) -> bool {
         matches!(
             self.perf_layout.as_str(),
-            "normal" | "minimal" | "no-sidebar" | "terminal-ui"
+            "normal" | "minimal" | "no-sidebar" | "terminal-ui" | "idle20" | "scrollback20"
         )
     }
     fn active(&self) -> Option<SessionId> {
@@ -346,6 +388,13 @@ impl Workspace {
                 self.update_visibility(window, cx);
             }
             CoreEvent::SessionChanged(info) => {
+                if self.perf_layout == "scrollback20" {
+                    eprintln!(
+                        "devdesk-scrollback-session id={} status={:?}",
+                        info.id.0, info.status
+                    );
+                }
+
                 if let Some(tab) = self.tabs.get_mut(&info.id) {
                     tab.view.update(cx, |view, cx| {
                         view.set_agent(info.agent.as_ref(), info.launch);
@@ -417,7 +466,7 @@ impl Workspace {
                     if let Some(pid) = info.pid {
                         stress.pids.push(pid);
                     }
-                    if stress.attached == 11 {
+                    if stress.attached == devdesk_core::perf::noisy_count() + 1 {
                         eprintln!("devdesk-many-progress attached all");
                         stress.started = Some(std::time::Instant::now());
                         self.schedule_stress(window, cx);
@@ -444,6 +493,7 @@ impl Workspace {
                 }
             }
             CoreEvent::SessionClosed(id) => {
+                self.split_states.remove(&id);
                 self.side_panes
                     .retain(|parent, side| *parent != id && *side != id);
                 self.tab_order.retain(|candidate| *candidate != id);
@@ -764,7 +814,11 @@ impl Workspace {
             ids.push(*side);
         }
         if self.stress.is_some() {
-            for id in [SessionId(11), SessionId(1), SessionId(2)] {
+            for id in [
+                SessionId(devdesk_core::perf::noisy_count() as u64 + 1),
+                SessionId(1),
+                SessionId(2),
+            ] {
                 if ids.len() < 3 && self.tabs.contains_key(&id) && !ids.contains(&id) {
                     ids.push(id);
                 }
@@ -784,7 +838,7 @@ impl Workspace {
         }
         stress.requested = true;
         self.active_project = Some("probe".into());
-        for index in 0..11 {
+        for index in 0..devdesk_core::perf::noisy_count() + 1 {
             self.core.send(CoreCommand::NewShell {
                 project: ["probe", "probe2", "probe3"][index % 3].into(),
                 size: devdesk_term::Dimensions::default(),
@@ -865,7 +919,7 @@ impl Workspace {
                 });
                 window.on_next_frame(move |window, cx| {
                     let _ = weak.update(cx, |this, cx| {
-                        let matches = this.palette_actions().len();
+                        let matches = this.palette_actions(cx).len();
                         this.stress.as_mut().expect("stress probe").fuzzy_matches = matches;
                         this.palette_open = false;
                         this.restore_focus(window, cx);
@@ -875,7 +929,9 @@ impl Workspace {
             });
         }
         if age >= std::time::Duration::from_secs(2)
-            && let Some(tab) = self.tabs.get(&SessionId(11))
+            && let Some(tab) = self
+                .tabs
+                .get(&SessionId(devdesk_core::perf::noisy_count() as u64 + 1))
         {
             let text: String = tab
                 .view
@@ -1203,7 +1259,7 @@ impl Workspace {
         });
         cx.notify();
     }
-    fn palette_actions(&self) -> Vec<(String, PaletteAction)> {
+    fn palette_actions(&self, cx: &App) -> Vec<(String, PaletteAction)> {
         let mut actions = vec![
             ("New Terminal".into(), PaletteAction::New),
             ("Close Terminal".into(), PaletteAction::Close),
@@ -1218,6 +1274,22 @@ impl Workspace {
             )
         }));
         if let Some(project) = &self.active_project {
+            let provider = self
+                .projects
+                .iter()
+                .find(|item| item.id == *project)
+                .and_then(|item| item.agents.default_provider.as_deref());
+            actions.push((
+                "Launch Default Agent".into(),
+                PaletteAction::LaunchAgent(
+                    if provider == Some("codex") {
+                        agent::Provider::Codex
+                    } else {
+                        agent::Provider::Claude
+                    },
+                    false,
+                ),
+            ));
             actions.push((
                 "Launch Claude".into(),
                 PaletteAction::LaunchAgent(agent::Provider::Claude, false),
@@ -1265,6 +1337,66 @@ impl Workspace {
                 }
             }
         }
+        for project in &self.projects {
+            actions.push((
+                format!("Remove Project: {}", project.name),
+                PaletteAction::Remove(RemovalTarget::Project(project.id.clone())),
+            ));
+        }
+        for (id, tab) in &self.tabs {
+            actions.push((
+                format!("Open Tab: {}", tab.info.name),
+                PaletteAction::Select(*id),
+            ));
+            if tab.info.agent.is_some() || tab.info.process.is_some() {
+                actions.push((
+                    format!("Remove: {}", tab.info.name),
+                    PaletteAction::Remove(RemovalTarget::Session(*id)),
+                ));
+            }
+        }
+        actions.push(("Focus Primary Terminal".into(), PaletteAction::FocusPrimary));
+        actions.push(("Focus Side Conversation".into(), PaletteAction::FocusSide));
+        if let Some(parent) = self.active()
+            && self.side_panes.contains_key(&parent)
+        {
+            actions.push((
+                "Widen Side Conversation".into(),
+                PaletteAction::ResizeSide(50),
+            ));
+            actions.push((
+                "Narrow Side Conversation".into(),
+                PaletteAction::ResizeSide(-50),
+            ));
+        }
+        let mut links = BTreeSet::new();
+        for id in self.visible_ids() {
+            if let Some(snapshot) = self.tabs[&id].view.read(cx).snapshot.as_ref() {
+                for link in &snapshot.hyperlinks {
+                    if link.uri.starts_with("https://")
+                        || link.uri.starts_with("http://")
+                        || link.uri.starts_with("file://")
+                    {
+                        links.insert(link.uri.clone());
+                    }
+                }
+            }
+        }
+        for uri in links {
+            let label: String = uri.chars().take(120).collect();
+            actions.push((format!("Open Link: {label}"), PaletteAction::OpenUrl(uri)));
+        }
+        actions.push(("Reload Configuration".into(), PaletteAction::Reload));
+        actions.push(("Quit DevDesk".into(), PaletteAction::Quit));
+        for project in &self.projects {
+            actions.push((
+                format!("Toggle Project Details: {}", project.name),
+                PaletteAction::ToggleProject(project.id.clone()),
+            ));
+        }
+        if let Some(id) = self.active() {
+            actions.push(("Restart Active Terminal".into(), PaletteAction::Restart(id)));
+        }
         actions.push(("Recover Previous Sessions…".into(), PaletteAction::Recover));
         actions
             .into_iter()
@@ -1284,6 +1416,36 @@ impl Workspace {
             PaletteAction::Close => self.close_terminal(&CloseTerminal, window, cx),
             PaletteAction::Rename => self.rename_terminal(&RenameTerminal, window, cx),
             PaletteAction::Add => self.add_project(&AddProject, window, cx),
+            PaletteAction::ResizeSide(delta) => {
+                if let Some(parent) = self.active()
+                    && let Some(state) = self.split_states.get(&parent).cloned()
+                {
+                    state.update(cx, |state, cx| {
+                        if let Some(size) = state.sizes().get(1).copied() {
+                            state.resize_panel(1, size + px(delta as f32), window, cx);
+                        }
+                    });
+                }
+            }
+            PaletteAction::OpenUrl(uri) => cx.open_url(&uri),
+            PaletteAction::Reload => self.core.send(CoreCommand::ReloadConfig),
+            PaletteAction::Quit => self.request_quit(window, cx),
+            PaletteAction::ToggleProject(id) => {
+                if !self.expanded.remove(&id) {
+                    self.expanded.insert(id);
+                }
+            }
+            PaletteAction::Remove(target) => self.confirm_remove(target, window, cx),
+            PaletteAction::Select(id) => self.choose_tab(id, window, cx),
+            PaletteAction::FocusPrimary => {
+                self.side_focus = None;
+            }
+            PaletteAction::FocusSide => {
+                self.side_focus = self
+                    .active()
+                    .and_then(|id| self.side_panes.get(&id))
+                    .copied();
+            }
             PaletteAction::Ask => self.ask_agent_question(&AskAgentQuestion, window, cx),
             PaletteAction::Start(id) => self.core.send(CoreCommand::Start(id)),
             PaletteAction::Stop(id) => self.core.send(CoreCommand::Stop(id)),
@@ -1376,6 +1538,15 @@ fn dot(status: &SessionStatus) -> &'static str {
 
 impl Render for Workspace {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Split state belongs to this view, rather than render-local keyed
+        // state: keyboard actions must resize it after rendering completes.
+        if let Some(parent) = self.active()
+            && self.side_panes.contains_key(&parent)
+        {
+            self.split_states
+                .entry(parent)
+                .or_insert_with(|| cx.new(|_| ResizableState::default()));
+        }
         let theme = cx.theme();
         let bg = theme.background;
         let fg = theme.foreground;
@@ -1630,6 +1801,7 @@ impl Render for Workspace {
                 agent::snapshot_label(record.snapshot_at),
                 self.tabs[&parent].info.name
             );
+            let split_state = self.split_states[&parent].clone();
             let side_pane = v_flex()
                 .size_full()
                 .min_w_0()
@@ -1657,6 +1829,7 @@ impl Render for Workspace {
             content = content.child(
                 div().flex_1().min_h_0().child(
                     h_resizable(("agent-split", parent.0))
+                        .with_state(&split_state)
                         .child(resizable_panel().child(self.tabs[&parent].view.clone()))
                         .child(resizable_panel().child(side_pane)),
                 ),
@@ -1747,7 +1920,7 @@ impl Render for Workspace {
                 .child(content),
         );
         if self.palette_open {
-            let entries = self.palette_actions();
+            let entries = self.palette_actions(cx);
             let actions: Vec<_> = entries.iter().map(|(_, action)| action.clone()).collect();
             let query_view = cx.weak_entity();
             let confirm_view = query_view.clone();

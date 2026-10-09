@@ -77,10 +77,24 @@ impl TerminalSession {
             env: spec.env,
             drain_on_exit: true,
         };
-        let pty = tty::new(&options, size.window_size(), 0)?;
+        // Concurrent macOS openpty calls reproduced allocation failures (-6).
+        // Serialize the short allocation/spawn stage on workers, before any
+        // Term lock or reader exists.
+        // Reading, painting, input and teardown never acquire this mutex.
+        static PTY_SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let pty = {
+            let _creation = PTY_SPAWN
+                .lock()
+                .map_err(|_| io::Error::other("PTY creation lock poisoned"))?;
+            tty::new(&options, size.window_size(), 0)
+        }
+        .map_err(|error| io::Error::new(error.kind(), format!("Spawn PTY: {error}")))?;
         let pid = pty.child().id();
         let owned = crate::kill::OwnedSession::capture(pid)?;
-        let master = pty.file().try_clone()?;
+        let master = pty
+            .file()
+            .try_clone()
+            .map_err(|error| io::Error::new(error.kind(), format!("Clone PTY master: {error}")))?;
         let (proxy, events) = EventProxy::new();
         if let Some(observer) = observer {
             proxy.set_lifecycle(observer);
@@ -105,7 +119,8 @@ impl TerminalSession {
                 proxy.clone(),
             )))
         };
-        let event_loop = EventLoop::new(term.clone(), proxy.clone(), pty, true, false)?;
+        let event_loop = EventLoop::new(term.clone(), proxy.clone(), pty, true, false)
+            .map_err(|error| io::Error::new(error.kind(), format!("Create PTY reader: {error}")))?;
         let input = event_loop.channel();
         proxy.set_input(input.clone());
         let reader = event_loop.spawn();
@@ -136,6 +151,13 @@ impl TerminalSession {
                 self.extra_sessions.push(session);
             }
         }
+    }
+    pub fn extra_sessions(&self) -> &[crate::kill::OwnedSession] {
+        &self.extra_sessions
+    }
+    pub fn forget_session(&mut self, identity: crate::kill::ProcessIdentity) {
+        self.extra_sessions
+            .retain(|session| session.leader != identity);
     }
     pub fn owned_sessions(&self) -> Vec<crate::kill::OwnedSession> {
         let mut sessions = vec![self.owned];

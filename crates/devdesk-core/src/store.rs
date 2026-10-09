@@ -114,6 +114,20 @@ impl Store {
             .map_err(|e| e.to_string())?;
         Ok(())
     }
+    /// Read on the actor's connection so a failed journal insert can be retried
+    /// without rewriting already persisted identities on each active scan.
+    pub fn contains(&self, session: OwnedSession) -> Result<bool, String> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM session_ledger WHERE sid=?1 AND leader_started_at=?2)",
+                params![
+                    session.leader.pid,
+                    i64::try_from(session.leader.started_us).map_err(|e| e.to_string())?
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())
+    }
     pub fn remove(&self, session: OwnedSession) -> Result<(), String> {
         self.connection
             .execute(

@@ -387,8 +387,63 @@ impl TerminalView {
 
     fn key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let stroke = &event.keystroke;
+        if stroke.modifiers.shift
+            && !stroke.modifiers.platform
+            && !stroke.modifiers.control
+            && !stroke.modifiers.alt
+            && matches!(stroke.key.as_str(), "pageup" | "pagedown")
+        {
+            if let Some(session) = &self.session {
+                session
+                    .handle
+                    .term
+                    .lock()
+                    .scroll_display(if stroke.key == "pageup" {
+                        Scroll::PageUp
+                    } else {
+                        Scroll::PageDown
+                    });
+                session.handle.invalidate();
+            }
+            window.prevent_default();
+            cx.stop_propagation();
+            return;
+        }
         if stroke.modifiers.platform {
             match stroke.key.as_str() {
+                "a" => {
+                    if let Some(session) = &self.session {
+                        use devdesk_term::GridDimensions as _;
+                        let mut term = session.handle.term.lock();
+                        let mut selection = devdesk_term::Selection::new(
+                            devdesk_term::SelectionType::Simple,
+                            devdesk_term::Point::new(term.topmost_line(), devdesk_term::Column(0)),
+                            devdesk_term::Side::Left,
+                        );
+                        selection.update(
+                            devdesk_term::Point::new(term.bottommost_line(), term.last_column()),
+                            devdesk_term::Side::Right,
+                        );
+                        selection.include_all();
+                        term.selection = Some(selection);
+                        drop(term);
+                        session.handle.invalidate();
+                    }
+                }
+                "home" | "end" => {
+                    if let Some(session) = &self.session {
+                        session
+                            .handle
+                            .term
+                            .lock()
+                            .scroll_display(if stroke.key == "home" {
+                                Scroll::Top
+                            } else {
+                                Scroll::Bottom
+                            });
+                        session.handle.invalidate();
+                    }
+                }
                 "c" => {
                     if let Some(session) = &self.session
                         && let Some(text) = session.handle.term.lock().selection_to_string()

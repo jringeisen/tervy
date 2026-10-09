@@ -193,3 +193,66 @@ os.write(1, b'PROBES_OK')
             .any(|run| run.text.contains("PROBES_OK"))
     );
 }
+
+#[test]
+fn concurrent_pty_allocations_all_start_and_teardown_cleanly() {
+    // Parallel openpty calls reproduced -6 allocation failures in the M7
+    // fixture. A barrier exercises the real serialized creation path.
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(20));
+    let workers: Vec<_> = (0..20)
+        .map(|_| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                TerminalSession::spawn(
+                    SpawnSpec {
+                        program: "/usr/bin/python3".into(),
+                        args: vec![
+                            "-u".into(),
+                            "-c".into(),
+                            "import os,signal; os.write(1,b'READY\\r\\n'); signal.pause()".into(),
+                        ],
+                        cwd: std::env::temp_dir(),
+                        env: HashMap::new(),
+                        scrollback_lines: 100,
+                    },
+                    Dimensions::default(),
+                )
+                .unwrap()
+                .0
+            })
+        })
+        .collect();
+    let sessions: Vec<_> = workers
+        .into_iter()
+        .map(|worker| worker.join().unwrap())
+        .collect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    for session in &sessions {
+        while !session
+            .handle
+            .snapshot(&Palette::default())
+            .runs
+            .iter()
+            .any(|run| run.text.contains("READY"))
+        {
+            assert!(
+                Instant::now() < deadline,
+                "launcher never reached its ready marker"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let owned: Vec<_> = sessions.iter().map(|session| session.owned).collect();
+    drop(sessions);
+    while owned
+        .iter()
+        .any(|session| !session.members().unwrap().is_empty())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "reader teardown left a launcher alive"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

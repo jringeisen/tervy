@@ -49,8 +49,9 @@ impl ManyProbe {
             values[((values.len() - 1) as f64 * q).round() as usize]
         }
         eprintln!(
-            "devdesk-many {{\"sessions\":{},\"noisy_terminals\":10,\"palette_frame_ms\":{:.3},\"fuzzy_matches\":{},\"visible\":3,\"frame_samples\":{},\"frame_p95_ms\":{:.3},\"frame_max_ms\":{:.3},\"echo_samples_ms\":{:?},\"switch_samples_ms\":{:?},\"echo_p95_ms\":{:.3},\"shutdown_ms\":{:.3},\"clean_shutdown\":{},\"sids\":{:?}}}",
+            "devdesk-many {{\"sessions\":{},\"noisy_terminals\":{},\"palette_frame_ms\":{:.3},\"fuzzy_matches\":{},\"visible\":3,\"frame_samples\":{},\"frame_p95_ms\":{:.3},\"frame_max_ms\":{:.3},\"echo_samples_ms\":{:?},\"switch_samples_ms\":{:?},\"echo_p95_ms\":{:.3},\"shutdown_ms\":{:.3},\"clean_shutdown\":{},\"sids\":{:?}}}",
             self.attached,
+            devdesk_core::perf::noisy_count(),
             self.palette_ms.unwrap_or(-1.),
             self.fuzzy_matches,
             self.frames.len(),

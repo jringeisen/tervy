@@ -88,11 +88,63 @@ impl Workspace {
                         this.choose_tab(side, window, cx);
                         assert_eq!(this.visible_ids(), vec![parent, side]);
                         eprintln!("devdesk-side-smoke PASS split_px={:.1}/{:.1} parent_after_close_px={:.1} primary_retained=true history_reopened=true question_input=true", f32::from(left.size.width), f32::from(right.size.width), f32::from(width));
-                        cx.quit();
+                        this.keyboard_smoke(false, window, cx);
                     });
                 });
             });
         });
         cx.notify();
+    }
+    /// Dispatch registered shortcuts after releasing the Workspace entity lease.
+    /// The native command component handles Enter, then restores pane focus.
+    fn keyboard_smoke(&self, side: bool, window: &mut Window, cx: &Context<Self>) {
+        let weak = cx.weak_entity();
+        window.on_next_frame(move |window, cx| {
+            window.dispatch_keystroke(Keystroke::parse("cmd-p").unwrap(), cx);
+            window.on_next_frame(move |window, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    assert!(this.palette_open);
+                    let entries = this.palette_actions(cx);
+                    assert!(entries.iter().any(|(_, action)| matches!(action, PaletteAction::Remove(RemovalTarget::Project(_)))));
+                    assert!(entries.iter().any(|(_, action)| matches!(action, PaletteAction::Remove(RemovalTarget::Session(_)))));
+                    assert!(entries.iter().any(|(_, action)| matches!(action, PaletteAction::Select(_))));
+                    let query = if side { "Focus Side Conversation" } else { "Focus Primary Terminal" };
+                    this.palette.update(cx, |state, cx| state.set_query(query, window, cx));
+                });
+                window.on_next_frame(move |window, _cx| {
+                    // Query callbacks are deferred; render the resulting model.
+                    window.on_next_frame(move |window, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            assert_eq!(this.palette_actions(cx).len(), 1);
+                        });
+                        window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+                        window.on_next_frame(move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                assert!(!this.palette_open);
+                                let target = if side { this.side_focus.unwrap() } else { this.active().unwrap() };
+                                assert!(this.tabs[&target].view.read(cx).focus.is_focused(window));
+                                if side {
+                                    eprintln!("devdesk-keyboard-smoke PASS palette_shortcut=true enter_confirmation=true primary_and_side_focus=true removal_and_history_available=true");
+                                    let before = this.tabs[&target].view.read(cx).bounds.size.width;
+                                    this.confirm_palette(PaletteAction::ResizeSide(50), window, cx);
+                                    let resize_view = cx.weak_entity();
+                                    window.on_next_frame(move |_, cx| {
+                                        let _ = resize_view.update(cx, |this, cx| {
+                                            let after = this.tabs[&target].view.read(cx).bounds.size.width;
+                                            assert!(after >= before + px(49.));
+                                            eprintln!("devdesk-resize-smoke PASS side_before_px={:.1} side_after_px={:.1}", f32::from(before), f32::from(after));
+                                            cx.quit();
+                                        });
+                                    });
+                                } else { this.keyboard_smoke(true, window, cx); }
+                            });
+                        });
+                    });
+                    window.refresh();
+                });
+            });
+            window.refresh();
+        });
+        window.refresh();
     }
 }

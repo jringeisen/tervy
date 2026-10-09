@@ -7,6 +7,9 @@ fixture datasets and integration-target manifest entries are omitted.
 
 - `alacritty_terminal` **0.26.0**, Apache-2.0, Alacritty contributors:
   [upstream](https://github.com/alacritty/alacritty).
+  `EventLoop` retains a **64 KiB** PTY read buffer instead of 1 MiB, matching
+  the existing approximately 64 KiB locked-read batch and reducing per-reader
+  committed stack memory. 🧪 M7 noisy/flood and idle-memory probes verify this.
   `Cell::push_zerowidth` retains at most **8 combining characters** per cell.
   `Term::set_hyperlink` rejects links with URI > **8192 bytes** or ID > **256
   bytes**, leaving their text visible. A rotating pool permits at most **256

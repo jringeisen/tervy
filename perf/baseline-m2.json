@@ -1,0 +1,409 @@
+{
+  "recorded": "2026-10-08",
+  "evidence": "🧪 measured locally; M2 owner approved 2026-10-08",
+  "milestone": "M2 (projects, tabs, shell lifecycle)",
+  "machine": {
+    "model": "MacBook Pro",
+    "model_identifier": "Mac14,6",
+    "chip": "Apple M2 Max",
+    "cpu_cores": 12,
+    "memory_gb": 96,
+    "architecture": "arm64",
+    "macos": "27.0.1",
+    "macos_build": "26A434"
+  },
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28), Xcode 27.0 (27A266a) already installed; cargo-deny 0.20.2; gpui-kit =0.7.1 / gpui-pre =0.3.8 with runtime_shaders",
+  "startup_first_frame_ms": {
+    "release": {
+      "runs": 10,
+      "p50": 164.35,
+      "p95": 619.4,
+      "min": 156.4,
+      "max": 619.4,
+      "first_run_after_build": 619.4,
+      "samples": [
+        619.4,
+        156.4,
+        165.6,
+        168.2,
+        164.0,
+        162.5,
+        158.5,
+        158.6,
+        167.4,
+        164.7
+      ]
+    },
+    "budget_p50_ms": 500,
+    "status": "PASS median. First post-build launch 619.4 ms; 402.8 ms elapsed before main. First-run/p95 is 23.3% above M1; median is effectively unchanged. No OS/Metal cache flush; not proof of true cold-cache performance.",
+    "method": "DEVDESK_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10; in-memory config; shell/env deferred until after first frame; benchmark exits before shell spawn."
+  },
+  "idle_release": {
+    "layout": "terminal",
+    "managed_children": {
+      "count_at_end": 1,
+      "footprint_sum_mb": 4.800992,
+      "cpu_percent_common_pids": 0.0,
+      "same_pids_entire_interval": true
+    },
+    "agent_cli_processes": {
+      "count": 0,
+      "footprint_sum_mb": 0,
+      "cpu_percent": 0
+    },
+    "settle_s": 10,
+    "elapsed_s": 60.001742708001984,
+    "cpu_percent": 0.007299579649402231,
+    "cpu_tick_delta": 105117,
+    "nanoseconds_per_cpu_tick": 41.666666666666664,
+    "footprint_mb": 70.058992,
+    "package_idle_wakeups_per_s": 0.0,
+    "interrupt_wakeups_per_s": 0.38332219968892106,
+    "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB"
+  },
+  "idle_limitations": "Single stable shell, 10-second settle then 60-second counters. Window visibility/occlusion is uncontrolled. This low-wakeup trial does not resolve A11 or establish always-visible idle CPU. Initial 60-second trial had five shell launches and is excluded as an idle baseline; its raw values are retained below.",
+  "idle_nonbaseline_trials": {
+    "multiple_shell_launches_60s": {
+      "layout": "terminal",
+      "managed_children": {
+        "count_at_end": 2,
+        "footprint_sum_mb": 9.42176,
+        "cpu_percent_common_pids": 0.045140261836642666,
+        "same_pids_entire_interval": true
+      },
+      "agent_cli_processes": {
+        "count": 0,
+        "footprint_sum_mb": 0,
+        "cpu_percent": 0
+      },
+      "settle_s": 10,
+      "elapsed_s": 60.00306724999973,
+      "cpu_percent": 1.4984535366953884,
+      "cpu_tick_delta": 21578834,
+      "nanoseconds_per_cpu_tick": 41.666666666666664,
+      "footprint_mb": 84.853744,
+      "package_idle_wakeups_per_s": 0.0,
+      "interrupt_wakeups_per_s": 90.09539424836693,
+      "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB"
+    },
+    "diagnostic_20s": {
+      "layout": "terminal",
+      "managed_children": {
+        "count_at_end": 1,
+        "footprint_sum_mb": 4.882936,
+        "cpu_percent_common_pids": 0.0,
+        "same_pids_entire_interval": true
+      },
+      "agent_cli_processes": {
+        "count": 0,
+        "footprint_sum_mb": 0,
+        "cpu_percent": 0
+      },
+      "settle_s": 10,
+      "elapsed_s": 20.00043275000644,
+      "cpu_percent": 0.004046787437635515,
+      "cpu_tick_delta": 19425,
+      "nanoseconds_per_cpu_tick": 41.666666666666664,
+      "footprint_mb": 87.114736,
+      "package_idle_wakeups_per_s": 0.0,
+      "interrupt_wakeups_per_s": 0.3499924270387473,
+      "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB"
+    },
+    "profile": "After the diagnostic interval, sample found the supervisor blocked on its mailbox and the PTY reader waiting; no periodic supervisor work. The GPUI main thread was waiting in AppKit. A11 remains unresolved for visible-window conditions."
+  },
+  "echo": {
+    "sample_count": 20,
+    "p95_painted_echo_ms": 8.145584000000001,
+    "p99_pty_write_ms": 1.619834,
+    "budget_echo_p95_ms": 16,
+    "budget_write_p99_ms": 2,
+    "record": {
+      "scenario": "echo",
+      "managed_children": {
+        "samples": [
+          {
+            "at_s": 0.049,
+            "count": 0,
+            "footprint_sum_mb": 0.0,
+            "agent_present": false,
+            "commands": []
+          },
+          {
+            "at_s": 0.304,
+            "count": 1,
+            "footprint_sum_mb": 4.375,
+            "agent_present": false,
+            "commands": [
+              "/bin/zsh"
+            ]
+          },
+          {
+            "at_s": 0.555,
+            "count": 5,
+            "footprint_sum_mb": 10.586,
+            "agent_present": false,
+            "commands": [
+              "/bin/zsh",
+              "/bin/zsh",
+              "/bin/zsh",
+              "/bin/zsh",
+              "tail"
+            ]
+          },
+          {
+            "at_s": 0.81,
+            "count": 1,
+            "footprint_sum_mb": 4.441,
+            "agent_present": false,
+            "commands": [
+              "/bin/zsh"
+            ]
+          },
+          {
+            "at_s": 1.065,
+            "count": 1,
+            "footprint_sum_mb": 5.161,
+            "agent_present": false,
+            "commands": [
+              "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/Resources/Python.app/Contents/MacOS/Python"
+            ]
+          },
+          {
+            "at_s": 1.35,
+            "count": 0,
+            "footprint_sum_mb": 0.0,
+            "agent_present": false,
+            "commands": []
+          }
+        ],
+        "note": "external snapshots; sums are distinct from DevDesk"
+      },
+      "agent_cli_processes": {
+        "samples": [],
+        "peak_sampled_footprint_sum_mb": 0
+      },
+      "exit_code": 0,
+      "measurements": [
+        {
+          "scenario": "echo",
+          "first_content_frame_ms": 736.522,
+          "pty_spawn_to_first_content_frame_ms": 32.156
+        },
+        {
+          "scenario": "echo",
+          "gpui_key_to_painted_echo_ms": [
+            6.742917,
+            7.246625,
+            6.515125,
+            6.819834,
+            5.1816249999999995,
+            6.478459,
+            5.055416,
+            4.9267080000000005,
+            4.533542,
+            4.032292,
+            3.072042,
+            3.2399999999999998,
+            3.453208,
+            1.727792,
+            1.58,
+            1.5751249999999999,
+            1.096875,
+            8.803125,
+            8.145584000000001,
+            7.784625
+          ],
+          "gpui_key_to_pty_write_ms": [
+            1.619834,
+            0.014333,
+            0.011250000000000001,
+            0.008124999999999999,
+            0.011833,
+            0.011417,
+            0.012458,
+            0.033666,
+            0.016249999999999997,
+            0.012125,
+            0.013708,
+            0.011667,
+            0.012292,
+            0.012792000000000001,
+            0.013375,
+            0.019375,
+            0.020458,
+            0.017249999999999998,
+            0.016458999999999998,
+            0.017082999999999997
+          ]
+        }
+      ],
+      "peak_sampled_footprint_mb": 77.137,
+      "footprint_samples": [
+        {
+          "at_s": 0.0,
+          "footprint_mb": 0.082
+        },
+        {
+          "at_s": 0.1,
+          "footprint_mb": 13.616
+        },
+        {
+          "at_s": 0.152,
+          "footprint_mb": 21.185
+        },
+        {
+          "at_s": 0.206,
+          "footprint_mb": 55.838
+        },
+        {
+          "at_s": 0.257,
+          "footprint_mb": 71.976
+        },
+        {
+          "at_s": 0.355,
+          "footprint_mb": 72.025
+        },
+        {
+          "at_s": 0.406,
+          "footprint_mb": 72.041
+        },
+        {
+          "at_s": 0.456,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.508,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.609,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.66,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.711,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.765,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.86,
+          "footprint_mb": 72.074
+        },
+        {
+          "at_s": 0.911,
+          "footprint_mb": 72.14
+        },
+        {
+          "at_s": 0.962,
+          "footprint_mb": 77.022
+        },
+        {
+          "at_s": 1.018,
+          "footprint_mb": 77.022
+        },
+        {
+          "at_s": 1.12,
+          "footprint_mb": 77.12
+        },
+        {
+          "at_s": 1.175,
+          "footprint_mb": 77.12
+        },
+        {
+          "at_s": 1.227,
+          "footprint_mb": 77.12
+        },
+        {
+          "at_s": 1.282,
+          "footprint_mb": 77.137
+        }
+      ],
+      "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+    }
+  },
+  "many": {
+    "sessions": 11,
+    "noisy_terminals": 10,
+    "palette_frame_ms": 8.293,
+    "fuzzy_matches": 3,
+    "visible": 3,
+    "frame_samples": 354,
+    "frame_p95_ms": 9.296,
+    "frame_max_ms": 39.138,
+    "echo_samples_ms": [
+      7.740917,
+      8.958874999999999,
+      8.265125,
+      7.878042,
+      8.841042,
+      7.65575,
+      8.829792,
+      8.447667000000001,
+      8.346625,
+      8.325000000000001,
+      8.335583,
+      8.330167,
+      8.333666,
+      8.331875,
+      8.330416999999999,
+      8.070167,
+      8.629875,
+      8.297667,
+      7.796542,
+      8.942791999999999
+    ],
+    "switch_samples_ms": [
+      8.24725,
+      7.5464579999999994,
+      10.902875,
+      8.332875,
+      7.521,
+      8.292542,
+      8.328875,
+      7.809833,
+      8.237,
+      7.535291
+    ],
+    "echo_p95_ms": 8.943,
+    "shutdown_ms": 108.078,
+    "clean_shutdown": true,
+    "sids": [
+      18019,
+      18020,
+      18021,
+      18022,
+      18023,
+      18024,
+      18025,
+      18026,
+      18027,
+      18029,
+      18030
+    ]
+  },
+  "many_checks": {
+    "status": "PASS",
+    "owned_sessions_checked": 11,
+    "survivors_after_app_exit": 0,
+    "budget_frame_p95_ms": 33,
+    "budget_switch_max_ms": 50,
+    "budget_shutdown_ms": 15000,
+    "raw_record": "perf/m2-many.json",
+    "note": "Ten yes producers plus one quiet echo child; three visible panes; three projects. Palette 8.293 ms and 3 fuzzy matches. Frame maximum 39.138 ms is above 33 ms individually; p95 9.296 ms passes. Synthetic keys and GPUI callbacks exclude physical delivery/compositor scanout."
+  },
+  "comparison_to_m1": {
+    "startup_p50_change_percent": 0.15234613040826517,
+    "idle_footprint_change_percent": 6.980166941547261,
+    "idle_cpu_comparison": "Not comparable without controlling visibility/occlusion; no A11 fix claimed.",
+    "m1_record": "perf/baseline-m1.json"
+  },
+  "verification": "scripts/check.sh: fmt, Clippy -D warnings, 32 tests, licenses pass. Bash/Python benchmark scripts parse. No new license exception. No real model calls in M2.",
+  "reproduce": "scripts/check.sh; scripts/perf/run-m2.sh (close other DevDesk windows; leave benchmark windows untouched).",
+  "review": "docs/m2-review.md; owner approved M2; M3 has not started."
+}

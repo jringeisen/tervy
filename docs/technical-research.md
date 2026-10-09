@@ -358,6 +358,47 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 - 🧪 Codex command workers create new SIDs, survive an original-session-only sweep, and remain direct descendants of its native CLI. TERM/KILL with captured and journaled descendant sessions passes the deterministic 20-second marker check. Legacy execution and native Ctrl-C alternatives failed and were removed. Detached jobs discovered before Stop retain identity after reparenting; unrelated sessions are protected by tests. ❓ Crash-time discovery gaps remain M7 hardening scope.
 - 🧪 65 offline tests and native Codex split smoke pass. First-frame p50 168.1 ms; first/p95 681.1 ms exceeds 500 ms. `perf/m6.json` records the samples; no true cold-cache claim.
 
+### 10j. M7 hardening and final performance (2026-10-09)
+
+- 🧪 Twenty noisy readers plus one quiet echo worker, three visible panes:
+  frame p95 **9.959 ms**, painted echo p95 **9.590 ms**, palette **10.315 ms**,
+  shutdown **124.741 ms**; all 21 owned sessions empty. Stable app threads **31**;
+  idle 20-shell app threads **27**. A8 supports retaining one reader per PTY at
+  the tested load. ❓ Forty-reader behavior is untested.
+- 🧪 Reader stack buffer reduced from **1 MiB to 64 KiB** in the attributed
+  pinned Alacritty source, matching the existing approximately 64 KiB locked
+  read batch. Twenty idle shells drop from an earlier **108.79 MB** trial to
+  final **89.21 MB**, passing 100 MB. Full 5,000-line histories in all twenty
+  grids use **375.56 MB**; their actual 100/113-column inline floor is **241.56 MB**.
+  Default history remains 5,000. The 100 MB printable flood preserves queued
+  input and paints 99 frames, max measured gap 10.2 ms.
+- 🧪 Parallel `openpty` allocation reproduced raw error **-6** before child
+  creation. A worker-only allocation/spawn mutex fixes the 20-worker barrier
+  regression and original full-history fixture. No Term lock or reader exists
+  while it is held; input/paint/read/teardown do not use it. ❓ Exact libc/kernel
+  cause is unverified. No speculative birth-identity retry is retained.
+- 🧪 Visibility is controlled with an external on-screen/frontmost metadata
+  check and a display-sleep assertion. Empty/single/twenty-shell app footprints
+  are **64.65 / 69.57 / 89.21 MB**; CPU **0.687 / 0.708 / 0.714%**. Empty memory
+  and visible idle CPU still miss budgets. Post-interval sampling shows Core
+  blocked in mailbox receive and CoreVideo invoking GPUI's display-link callback.
+  `sudo -n powermetrics` requires a password. ❓ Timer attribution remains
+  unavailable; source inspection finds no recurring idle DevDesk deadline.
+- 🧪 Final startup median **173.3 ms**, first/p95 **633.9 ms**, +5.45% median vs
+  M2. First/p95 still misses 500 ms; no OS/Metal cache flush, so no true cold-cache
+  claim. Single-shell painted echo p95 **7.853 ms**, write sample p99 **1.009 ms**.
+  Comparator flags >15% increases and refuses to compare changed visibility or
+  noisy-reader counts as like workloads. See `perf/baseline.json` and M7 review.
+- 🧪 Panic subprocess cleanup, generic crash recovery, and hard-crash recovery
+  of a separately journaled Codex job pass. Active/job-only one-second scanning
+  clears when no work needs it. Logs are capped; panic payloads are omitted.
+  ❓ Jobs born/orphaned between scans can escape capture; foreign AppKit callback
+  panics can abort before graceful cleanup completes. Recovery is best effort.
+- 🧪 Unsigned local app bundle, native split/keyboard shortcuts/Enter and resize
+  **480→530 px** pass. **69** ordinary tests, fmt, Clippy and licenses pass.
+  M5/M6 real-provider evidence remains separate; no absent-owner visual review.
+
+
 ## 11. Library compatibility and licensing
 
 - **Version coupling:** `gpui-component` pins `gpui-pre` exactly, and every GPUI-dependent crate must match that pin. Upgrades happen as one unit ("bump gpui-kit").
@@ -403,7 +444,7 @@ All the risks in one place. Details are in the sections referenced.
 | A5 | `--settings` hooks add to, rather than replace, the user's hooks | Could disable the user's own hooks | 🧪 M4: Claude 2.1.295, temporary user-level + injected Setup hooks both fired with the same ID using `--init-only`; real user settings unchanged (§10g) |
 | A6 | `codex -c notify=[…]` and `-c tui.*` work in the interactive TUI and force embedded mode | Status degrades to exited/running only | 🧪 M6 passes overrides with visible-thread identity filtering; §10i |
 | A7 | Children spawned via alacritty `tty` start with default signal dispositions and mask | Children ignore SIGINT/SIGPIPE, so graceful stop fails | M1 |
-| A8 | One OS thread per PTY is acceptable at 20–40 terminals | Need a shared `polling`-based reader | M7 benchmark |
+| A8 | One OS thread per PTY is acceptable at 20–40 terminals | Need a shared `polling`-based reader | 🧪 M7: 20 noisy + echo frame p95 9.959 ms, 31 app threads; retain current readers. ❓ 40 untested (§10j) |
 | A9 | gpui-component's input, list, tabs and resizable cover the palette, tabs and split | More custom UI work | 🧪 M2 Input/Command/TabBar compile and run; subsequence fuzzy matching is custom. 🧪 M5 native render smoke verifies equal split geometry, side-only close, history reopen and question input (§10h). |
 | A11 | An idle GPUI window is near-zero CPU with no periodic wakeups | Idle budgets unreachable without upstream changes | **M0 measured: over budget.** 🧪 Replacement machine: 61 MB, 0.553% CPU, 0.788 process idle wakeups/s from counter deltas (§10b). Original machine reported 75 MB, 0.38% CPU, ~76 wakeups/s; ❓ its wakeup rate needs raw-sample validation because default `top` counters are cumulative. **M1 investigated before terminals:** sidebar/blank controls retain CoreVideo callbacks; no app-facing stop/rearm API (§10c). Not fixed. Final idle-shell sample is in `perf/baseline.json` |
 | A10 | Scrollback memory ≈ 24 B/cell (alacritty `Cell`) | Budget recalculation | 🧪 **Verified as an inline floor:** 24 B/cell; measured headless peaks ~19.1 MB plain/styled, ~19.7 MB links, ~77.0 MB all-combining at 120 columns/5,000 history (§10d). Bounded metadata patches required |

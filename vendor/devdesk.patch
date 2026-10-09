@@ -194,3 +194,10 @@
          self.osc_raw.clear();
          self.osc_num_params = 0;
      }
+--- a/vendor/alacritty_terminal-0.26.0/src/event_loop.rs
++++ b/vendor/alacritty_terminal-0.26.0/src/event_loop.rs
+@@ -24 +24,3 @@
+-pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
++// DevDesk: retain 64 KiB per PTY rather than a 1 MiB reader stack buffer.
++// MAX_LOCKED_READ already releases the grid after roughly 64 KiB.
++pub(crate) const READ_BUFFER_SIZE: usize = 0x1_0000;

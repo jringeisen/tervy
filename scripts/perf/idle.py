@@ -9,11 +9,13 @@ Package-idle wakeups are not all thread wakeups and do not identify timers.
 """
 
 import argparse
+import ast
 import ctypes
 import json
 import os
 from pathlib import Path
 import subprocess
+import re
 import time
 
 
@@ -74,9 +76,27 @@ def nanoseconds_per_tick():
     return info.numer / info.denom
 
 
+def threads(pid):
+    # SDK sys/proc_info.h, proc_taskinfo: six uint64s then twelve int32s.
+    class Task(ctypes.Structure):
+        _fields_ = [("times", ctypes.c_uint64 * 6), ("counts", ctypes.c_int32 * 12)]
+    value = Task()
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib")
+    if libproc.proc_pidinfo(pid, 4, 0, ctypes.byref(value), ctypes.sizeof(value)) != ctypes.sizeof(value):
+        raise OSError("proc_pidinfo task failed")
+    return value.counts[9]
+
+
+def window_state(pid):
+    helper = Path("target/perf-helpers/window-state")
+    if not helper.exists():
+        return {"verified": False, "reason": "build scripts/perf/window-state.swift first"}
+    return json.loads(subprocess.check_output([str(helper), str(pid)], text=True, timeout=3))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--layout", choices=["normal", "no-sidebar", "minimal", "terminal"], default="normal")
+    parser.add_argument("--layout", choices=["normal", "no-sidebar", "minimal", "terminal", "idle20", "scrollback20"], default="normal")
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--settle", type=float, default=10)
     parser.add_argument("--binary", type=Path, default=Path("target/release/devdesk"))
@@ -88,6 +108,8 @@ def main():
     env = os.environ.copy()
     ns_per_tick = nanoseconds_per_tick()
     env["DEVDESK_PERF_LAYOUT"] = args.layout
+    if args.layout == "scrollback20":
+        env["DEVDESK_PERF_SCENARIO"] = "scrollback"
     env["DEVDESK_LOG"] = "devdesk=trace"
     # Keep the first-frame benchmark's quit flag out of long-running probes.
     env.pop("DEVDESK_PERF_EXIT", None)
@@ -95,9 +117,20 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.with_suffix(".stderr.txt").open("w") as log:
         app = subprocess.Popen([str(args.binary.resolve())], env=env, stdout=log, stderr=log)
+        awake = subprocess.Popen(["caffeinate", "-d", "-i", "-w", str(app.pid)])
         try:
             print(f"{args.layout}: pid {app.pid}, settling {args.settle}s", flush=True)
             time.sleep(args.settle)
+            grids = []
+            if args.layout in ("idle20", "scrollback20"):
+                lines = args.output.with_suffix(".stderr.txt").read_text().splitlines()
+                reports = [line.removeprefix("devdesk-idle-grids ") for line in lines if line.startswith("devdesk-idle-grids ")]
+                if len(reports) != 1:
+                    raise RuntimeError("missing one-shot grid report before idle interval")
+                grids = ast.literal_eval(reports[0])
+                if len(grids) != 20 or (args.layout == "scrollback20" and any(row[2] != 5000 for row in grids)):
+                    raise RuntimeError(f"invalid 20-session scrollback fixture: {grids}")
+            initial_window = window_state(app.pid)
             first = usage(app.pid)
             first_children = child_usage(app.pid)
             start = time.monotonic()
@@ -110,6 +143,10 @@ def main():
                               - (first_children[pid][0].user_ticks + first_children[pid][0].system_ticks) for pid in common)
             result = {
                 "layout": args.layout,
+                "terminal_grids_columns_rows_history": grids,
+                "window_before": initial_window,
+                "window_after": window_state(app.pid),
+                "threads_at_end": threads(app.pid),
                 "managed_children": {
                     "count_at_end": len(last_children),
                     "footprint_sum_mb": sum(value.footprint_bytes for value, _ in last_children.values()) / 1_000_000,
@@ -127,6 +164,8 @@ def main():
                 "interrupt_wakeups_per_s": (last.interrupt_wakeups - first.interrupt_wakeups) / elapsed,
                 "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB",
             }
+            if args.layout in ("idle20", "scrollback20") and (len(first_children) != 20 or len(last_children) != 20):
+                raise RuntimeError("20-session fixture lost a worker")
             args.output.write_text(json.dumps(result, indent=2) + "\n")
             print(json.dumps(result), flush=True)
             if args.sample:
@@ -138,6 +177,9 @@ def main():
             except subprocess.TimeoutExpired:
                 app.kill()
                 app.wait()
+            awake.wait(timeout=3)
+            for sid, birth in re.findall(r"devdesk-owned sid=(\d+) started_us=(\d+)", args.output.with_suffix(".stderr.txt").read_text()):
+                subprocess.run(["target/release/examples/session_cleanup", sid, birth], check=True, capture_output=True, timeout=5)
 
 
 if __name__ == "__main__":
