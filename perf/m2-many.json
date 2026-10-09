@@ -1,0 +1,263 @@
+{
+  "evidence": "🧪 visible macOS release UI; synthetic GPUI input; no model prompts",
+  "exit_code": 0,
+  "failure": null,
+  "measurements": [
+    {
+      "sessions": 11,
+      "noisy_terminals": 10,
+      "palette_frame_ms": 8.293,
+      "fuzzy_matches": 3,
+      "visible": 3,
+      "frame_samples": 354,
+      "frame_p95_ms": 9.296,
+      "frame_max_ms": 39.138,
+      "echo_samples_ms": [
+        7.740917,
+        8.958874999999999,
+        8.265125,
+        7.878042,
+        8.841042,
+        7.65575,
+        8.829792,
+        8.447667000000001,
+        8.346625,
+        8.325000000000001,
+        8.335583,
+        8.330167,
+        8.333666,
+        8.331875,
+        8.330416999999999,
+        8.070167,
+        8.629875,
+        8.297667,
+        7.796542,
+        8.942791999999999
+      ],
+      "switch_samples_ms": [
+        8.24725,
+        7.5464579999999994,
+        10.902875,
+        8.332875,
+        7.521,
+        8.292542,
+        8.328875,
+        7.809833,
+        8.237,
+        7.535291
+      ],
+      "echo_p95_ms": 8.943,
+      "shutdown_ms": 108.078,
+      "clean_shutdown": true,
+      "sids": [
+        18019,
+        18020,
+        18021,
+        18022,
+        18023,
+        18024,
+        18025,
+        18026,
+        18027,
+        18029,
+        18030
+      ]
+    }
+  ],
+  "process_samples": [
+    {
+      "at_s": 0.047,
+      "devdesk_mb": 8.422096,
+      "managed_children_count": 0,
+      "managed_children_mb": 0.0,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 0.299,
+      "devdesk_mb": 72.729584,
+      "managed_children_count": 1,
+      "managed_children_mb": 3.228128,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 0.552,
+      "devdesk_mb": 72.860656,
+      "managed_children_count": 1,
+      "managed_children_mb": 4.34224,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 0.803,
+      "devdesk_mb": 78.77528,
+      "managed_children_count": 0,
+      "managed_children_mb": 0.0,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 1.059,
+      "devdesk_mb": 240.370792,
+      "managed_children_count": 9,
+      "managed_children_mb": 14.583992,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 1.317,
+      "devdesk_mb": 244.860008,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 1.572,
+      "devdesk_mb": 247.28484,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 1.823,
+      "devdesk_mb": 247.317608,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 2.073,
+      "devdesk_mb": 247.350376,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 2.329,
+      "devdesk_mb": 248.546408,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 2.601,
+      "devdesk_mb": 248.59556,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 2.854,
+      "devdesk_mb": 248.59556,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 3.106,
+      "devdesk_mb": 248.644712,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 3.361,
+      "devdesk_mb": 248.644712,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 3.618,
+      "devdesk_mb": 248.644712,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 3.878,
+      "devdesk_mb": 248.661096,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 4.133,
+      "devdesk_mb": 248.661096,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 4.392,
+      "devdesk_mb": 248.661096,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 4.644,
+      "devdesk_mb": 248.661096,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 4.894,
+      "devdesk_mb": 248.67748,
+      "managed_children_count": 11,
+      "managed_children_mb": 16.911,
+      "agent_cli_count": 0
+    },
+    {
+      "at_s": 5.148,
+      "devdesk_mb": 116.081792,
+      "managed_children_count": 0,
+      "managed_children_mb": 0.0,
+      "agent_cli_count": 0
+    }
+  ],
+  "sessions": [
+    {
+      "sid": 18019,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18020,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18021,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18022,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18023,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18024,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18025,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18026,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18027,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18029,
+      "survivors_after_app_exit": 0
+    },
+    {
+      "sid": 18030,
+      "survivors_after_app_exit": 0
+    }
+  ],
+  "note": "Ten yes producers, one raw echo child, three visible panes, ten project switches. Frame callbacks measure GPUI frame scheduling, excluding compositor scanout. Separate managed-child trees; no agent CLI."
+}

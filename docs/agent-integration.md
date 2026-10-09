@@ -2,6 +2,11 @@
 
 Status: **Proposed**. Evidence markers (✅ 🧪 📘 ❓) follow [technical-research.md](technical-research.md#how-to-read-this-document). Versions verified: Claude Code 2.1.295, codex-cli 0.161.0.
 
+🧪 Replacement-machine M1 terminal startup fixtures cover Claude Code 2.1.295 and
+codex-cli 0.162.0 (`codex --no-daemon`), without submitting a model prompt. These
+are terminal protocol checks only. ❓ Re-run the full Appendix A fork/read-only
+probes before relying on changed-version integration flags in M4–M6.
+
 ---
 
 ## 1. Integration strategy

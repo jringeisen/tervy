@@ -14,6 +14,8 @@ publish = false
 [workspace.dependencies]
 gpui-kit = "=0.7.1"
 alacritty_terminal = "=0.26.0"
+async-channel = "2.5"
+libc = "0.2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "env-filter"] }
 
@@ -29,3 +31,8 @@ todo = "warn"
 
 [profile.release]
 debug = "line-tables-only"
+
+# Pinned registry sources with narrow terminal patches; see vendor/README.md.
+[patch.crates-io]
+alacritty_terminal = { path = "vendor/alacritty_terminal-0.26.0" }
+vte = { path = "vendor/vte-0.15.0" }

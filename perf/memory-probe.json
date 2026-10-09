@@ -1,0 +1,101 @@
+{
+  "evidence": "🧪 macOS M2 Max release headless Term + parser; fresh process per scenario; peak RSS bytes",
+  "samples": [
+    {
+      "scenario": "combining",
+      "lines": 5000,
+      "history_lines": 4961,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 76480512,
+      "elapsed_ms": 131.34
+    },
+    {
+      "scenario": "combining",
+      "lines": 10000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 76972032,
+      "elapsed_ms": 263.643
+    },
+    {
+      "scenario": "combining",
+      "lines": 20000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 76972032,
+      "elapsed_ms": 532.579
+    },
+    {
+      "scenario": "links",
+      "lines": 5000,
+      "history_lines": 4961,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19578880,
+      "elapsed_ms": 1178.395
+    },
+    {
+      "scenario": "links",
+      "lines": 10000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19726336,
+      "elapsed_ms": 2322.374
+    },
+    {
+      "scenario": "links",
+      "lines": 20000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19726336,
+      "elapsed_ms": 4596.284
+    },
+    {
+      "scenario": "plain",
+      "lines": 5000,
+      "history_lines": 4961,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 18972672,
+      "elapsed_ms": 5.976
+    },
+    {
+      "scenario": "plain",
+      "lines": 10000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19021824,
+      "elapsed_ms": 10.417
+    },
+    {
+      "scenario": "plain",
+      "lines": 20000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19070976,
+      "elapsed_ms": 18.653
+    },
+    {
+      "scenario": "styled",
+      "lines": 5000,
+      "history_lines": 4961,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19005440,
+      "elapsed_ms": 5.769
+    },
+    {
+      "scenario": "styled",
+      "lines": 10000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19054592,
+      "elapsed_ms": 10.741
+    },
+    {
+      "scenario": "styled",
+      "lines": 20000,
+      "history_lines": 5000,
+      "cell_bytes": 24,
+      "peak_resident_bytes": 19103744,
+      "elapsed_ms": 19.634
+    }
+  ]
+}

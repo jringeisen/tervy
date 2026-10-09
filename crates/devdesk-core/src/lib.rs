@@ -4,4 +4,7 @@
 //! Plain synchronous Rust (threads + channels). It never depends on GPUI
 //! (architecture.md §2–§3).
 //!
-//! Populated from M2.
+pub mod config;
+pub mod env;
+pub mod instance;
+pub mod supervisor;

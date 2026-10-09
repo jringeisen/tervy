@@ -1,0 +1,37 @@
+{
+  "agent": "claude",
+  "version": "2.1.295 (Claude Code)",
+  "argv": [
+    "claude"
+  ],
+  "date": "2026-10-08",
+  "dimensions": {
+    "columns": 120,
+    "rows": 40,
+    "cell_width": 8,
+    "cell_height": 18
+  },
+  "method": "real CLI startup in PTY, no submitted prompt; protocol probes only",
+  "first_pty_output_ms": 245.99345900060143,
+  "exchanges": [
+    {
+      "query_hex": "1b5b3f75",
+      "reply_hex": "1b5b3f3075",
+      "at_ms": 255.525
+    },
+    {
+      "query_hex": "1b5b63",
+      "reply_hex": "1b5b3f3663",
+      "at_ms": 255.564
+    }
+  ],
+  "keys": [
+    {
+      "key": "Enter",
+      "shift": true,
+      "injected_at_ms": 4020.274,
+      "legacy_hex": "1b5b31333b3275",
+      "kitty_flags_1_hex": "1b5b31333b3275"
+    }
+  ]
+}

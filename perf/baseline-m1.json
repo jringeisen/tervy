@@ -1,0 +1,1172 @@
+{
+  "recorded": "2026-10-08",
+  "evidence": "🧪 measured locally; visible release builds; M1 owner approved 2026-10-08",
+  "milestone": "M1 (one terminal; owner approved, uncommitted)",
+  "machine": {
+    "model": "MacBook Pro",
+    "model_identifier": "Mac14,6",
+    "chip": "Apple M2 Max",
+    "cpu_cores": 12,
+    "memory_gb": 96,
+    "architecture": "arm64",
+    "macos": "27.0.1",
+    "macos_build": "26A434"
+  },
+  "toolchain": "rustc 1.99.0 (b940084d7 2026-09-28), Xcode 27.0 (27A266a) already installed; cargo-deny 0.20.2; gpui-kit =0.7.1 / gpui-pre =0.3.8 with runtime_shaders",
+  "startup_first_frame_ms": {
+    "release": {
+      "runs": 10,
+      "p50": 164.10000000000002,
+      "p95": 502.4,
+      "min": 161.4,
+      "max": 502.4,
+      "first_run_after_build": 502.4,
+      "samples": [
+        502.4,
+        165.5,
+        164.5,
+        164.4,
+        162.2,
+        163.8,
+        161.4,
+        161.9,
+        171.0,
+        162.7
+      ]
+    },
+    "method": "scripts/perf/startup.sh release 10; all launches included, no OS/Metal cache flush. Shell/env startup is deferred until after the first frame. Benchmark exits then, before spawning the shell. Content timing is measured separately.",
+    "budget_p50_ms": 500,
+    "status": "PASS p50; first post-build launch 502.4 ms exceeds 500 ms individually. True cold-cache performance unverified.",
+    "m0_p50_ms": 169.9,
+    "m0_p50_change_percent": -3.4137728075338325
+  },
+  "idle_release": {
+    "layout": "terminal",
+    "managed_children": {
+      "count_at_end": 1,
+      "footprint_sum_mb": 4.83376,
+      "cpu_percent_common_pids": 0.0,
+      "same_pids_entire_interval": true
+    },
+    "agent_cli_processes": {
+      "count": 0,
+      "footprint_sum_mb": 0,
+      "cpu_percent": 0
+    },
+    "settle_s": 10,
+    "elapsed_s": 60.00165404200379,
+    "cpu_percent": 0.757882787722808,
+    "cpu_tick_delta": 10913813,
+    "nanoseconds_per_cpu_tick": 41.666666666666664,
+    "footprint_mb": 65.487832,
+    "package_idle_wakeups_per_s": 0.1333296577857612,
+    "interrupt_wakeups_per_s": 120.49667822388167,
+    "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB"
+  },
+  "idle_budget_assessment": {
+    "cpu_percent_budget": 0.3,
+    "one_terminal_footprint_mb_budget": 100,
+    "cpu_status": "OVER",
+    "footprint_status": "PASS for one shell; empty-window controls remain over their 60 MB budget",
+    "timer_wakeups_status": "No DevDesk polling/blink timer added. Process counters cannot attribute timers. Pinned GPUI visible-window display link remains active; see docs/technical-research.md §10c.",
+    "method_note": "10 s settle, isolated 60 s sample. External sampler; no build or other benchmark window overlapped. CPU is DevDesk alone, decimal MB footprint. Shell child is separate."
+  },
+  "input_latency_ms": {
+    "gpui_key_to_pty_write_ms": {
+      "count": 20,
+      "p50": 0.00875,
+      "p95": 0.012707999999999999,
+      "p99": 1.534,
+      "max": 1.534,
+      "samples": [
+        1.534,
+        0.008957999999999999,
+        0.007125,
+        0.0095,
+        0.006875,
+        0.006833,
+        0.009375,
+        0.00775,
+        0.012707999999999999,
+        0.010166999999999999,
+        0.010499999999999999,
+        0.007958000000000002,
+        0.005708,
+        0.00725,
+        0.010750000000000001,
+        0.0077919999999999994,
+        0.008124999999999999,
+        0.008542000000000001,
+        0.012541,
+        0.009375
+      ]
+    },
+    "gpui_key_to_painted_echo_ms": {
+      "count": 20,
+      "p50": 4.647646,
+      "p95": 9.212,
+      "p99": 9.57625,
+      "max": 9.57625,
+      "samples": [
+        8.222959,
+        9.212,
+        7.155875,
+        7.848249999999999,
+        6.627041999999999,
+        3.5096670000000003,
+        5.064417,
+        4.5821250000000004,
+        3.89575,
+        4.901708,
+        4.713166999999999,
+        2.462542,
+        1.158792,
+        2.926458,
+        2.547292,
+        1.167583,
+        1.101083,
+        7.6905,
+        1.6875,
+        9.57625
+      ]
+    }
+  },
+  "input_latency_method": "20 synthetic GPUI key dispatches at varied frame phases through native text input. Excludes physical keyboard delivery and compositor scanout. Sample quantiles are not population guarantees.",
+  "terminal_scenarios": {
+    "echo": {
+      "scenario": "echo",
+      "managed_children": {
+        "samples": [
+          {
+            "at_s": 0.045,
+            "count": 0,
+            "footprint_sum_mb": 0.0,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.303,
+            "count": 1,
+            "footprint_sum_mb": 4.326,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.569,
+            "count": 1,
+            "footprint_sum_mb": 4.391,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.826,
+            "count": 1,
+            "footprint_sum_mb": 4.604,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.106,
+            "count": 1,
+            "footprint_sum_mb": 5.178,
+            "agent_present": false
+          }
+        ],
+        "note": "external snapshots; sums are distinct from DevDesk"
+      },
+      "agent_cli_processes": {
+        "samples": [],
+        "peak_sampled_footprint_sum_mb": 0
+      },
+      "exit_code": 0,
+      "measurements": [
+        {
+          "scenario": "echo",
+          "first_content_frame_ms": 772.712,
+          "pty_spawn_to_first_content_frame_ms": 24.792
+        },
+        {
+          "scenario": "echo",
+          "gpui_key_to_painted_echo_ms": [
+            8.222959,
+            9.212,
+            7.155875,
+            7.848249999999999,
+            6.627041999999999,
+            3.5096670000000003,
+            5.064417,
+            4.5821250000000004,
+            3.89575,
+            4.901708,
+            4.713166999999999,
+            2.462542,
+            1.158792,
+            2.926458,
+            2.547292,
+            1.167583,
+            1.101083,
+            7.6905,
+            1.6875,
+            9.57625
+          ],
+          "gpui_key_to_pty_write_ms": [
+            1.534,
+            0.008957999999999999,
+            0.007125,
+            0.0095,
+            0.006875,
+            0.006833,
+            0.009375,
+            0.00775,
+            0.012707999999999999,
+            0.010166999999999999,
+            0.010499999999999999,
+            0.007958000000000002,
+            0.005708,
+            0.00725,
+            0.010750000000000001,
+            0.0077919999999999994,
+            0.008124999999999999,
+            0.008542000000000001,
+            0.012541,
+            0.009375
+          ]
+        }
+      ],
+      "peak_sampled_footprint_mb": 72.861,
+      "footprint_samples": [
+        {
+          "at_s": 0.0,
+          "footprint_mb": 0.115
+        },
+        {
+          "at_s": 0.098,
+          "footprint_mb": 13.469
+        },
+        {
+          "at_s": 0.148,
+          "footprint_mb": 20.546
+        },
+        {
+          "at_s": 0.208,
+          "footprint_mb": 55.166
+        },
+        {
+          "at_s": 0.259,
+          "footprint_mb": 70.583
+        },
+        {
+          "at_s": 0.36,
+          "footprint_mb": 70.616
+        },
+        {
+          "at_s": 0.414,
+          "footprint_mb": 70.649
+        },
+        {
+          "at_s": 0.465,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.525,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.624,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.674,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.726,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.78,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.879,
+          "footprint_mb": 70.698
+        },
+        {
+          "at_s": 0.939,
+          "footprint_mb": 72.746
+        },
+        {
+          "at_s": 0.999,
+          "footprint_mb": 72.844
+        },
+        {
+          "at_s": 1.05,
+          "footprint_mb": 72.844
+        },
+        {
+          "at_s": 1.158,
+          "footprint_mb": 72.844
+        },
+        {
+          "at_s": 1.209,
+          "footprint_mb": 72.861
+        },
+        {
+          "at_s": 1.26,
+          "footprint_mb": 72.861
+        }
+      ],
+      "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+    },
+    "flood": {
+      "scenario": "flood",
+      "managed_children": {
+        "samples": [
+          {
+            "at_s": 0.045,
+            "count": 0,
+            "footprint_sum_mb": 0.0,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.318,
+            "count": 1,
+            "footprint_sum_mb": 4.326,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.582,
+            "count": 5,
+            "footprint_sum_mb": 10.373,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.847,
+            "count": 2,
+            "footprint_sum_mb": 3.409,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.11,
+            "count": 2,
+            "footprint_sum_mb": 3.409,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.379,
+            "count": 2,
+            "footprint_sum_mb": 3.409,
+            "agent_present": false
+          }
+        ],
+        "note": "external snapshots; sums are distinct from DevDesk"
+      },
+      "agent_cli_processes": {
+        "samples": [],
+        "peak_sampled_footprint_sum_mb": 0
+      },
+      "exit_code": 0,
+      "measurements": [
+        {
+          "scenario": "flood",
+          "first_content_frame_ms": 580.925,
+          "pty_spawn_to_first_content_frame_ms": 18.266
+        },
+        {
+          "scenario": "flood",
+          "elapsed_ms": 1329.396,
+          "painted_frames": 98,
+          "max_paint_gap_ms": 10.39,
+          "queued_input_seen": true
+        }
+      ],
+      "peak_sampled_footprint_mb": 111.33,
+      "footprint_samples": [
+        {
+          "at_s": 0.0,
+          "footprint_mb": 0.131
+        },
+        {
+          "at_s": 0.098,
+          "footprint_mb": 13.19
+        },
+        {
+          "at_s": 0.158,
+          "footprint_mb": 20.94
+        },
+        {
+          "at_s": 0.218,
+          "footprint_mb": 70.419
+        },
+        {
+          "at_s": 0.273,
+          "footprint_mb": 70.419
+        },
+        {
+          "at_s": 0.373,
+          "footprint_mb": 70.452
+        },
+        {
+          "at_s": 0.425,
+          "footprint_mb": 70.501
+        },
+        {
+          "at_s": 0.476,
+          "footprint_mb": 70.518
+        },
+        {
+          "at_s": 0.536,
+          "footprint_mb": 70.534
+        },
+        {
+          "at_s": 0.634,
+          "footprint_mb": 70.534
+        },
+        {
+          "at_s": 0.693,
+          "footprint_mb": 70.534
+        },
+        {
+          "at_s": 0.744,
+          "footprint_mb": 94.455
+        },
+        {
+          "at_s": 0.798,
+          "footprint_mb": 110.56
+        },
+        {
+          "at_s": 0.898,
+          "footprint_mb": 110.56
+        },
+        {
+          "at_s": 0.958,
+          "footprint_mb": 110.56
+        },
+        {
+          "at_s": 1.01,
+          "footprint_mb": 110.56
+        },
+        {
+          "at_s": 1.06,
+          "footprint_mb": 110.56
+        },
+        {
+          "at_s": 1.17,
+          "footprint_mb": 111.314
+        },
+        {
+          "at_s": 1.223,
+          "footprint_mb": 111.33
+        },
+        {
+          "at_s": 1.28,
+          "footprint_mb": 111.33
+        },
+        {
+          "at_s": 1.331,
+          "footprint_mb": 111.33
+        },
+        {
+          "at_s": 1.429,
+          "footprint_mb": 111.33
+        },
+        {
+          "at_s": 1.479,
+          "footprint_mb": 110.282
+        }
+      ],
+      "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+    },
+    "seq": {
+      "scenario": "seq",
+      "managed_children": {
+        "samples": [
+          {
+            "at_s": 0.045,
+            "count": 0,
+            "footprint_sum_mb": 0.0,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.313,
+            "count": 1,
+            "footprint_sum_mb": 4.326,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.576,
+            "count": 1,
+            "footprint_sum_mb": 4.391,
+            "agent_present": false
+          },
+          {
+            "at_s": 0.832,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.09,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.358,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.622,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 1.887,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 2.156,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 2.416,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 2.674,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 2.949,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 3.219,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          },
+          {
+            "at_s": 3.477,
+            "count": 2,
+            "footprint_sum_mb": 3.179,
+            "agent_present": false
+          }
+        ],
+        "note": "external snapshots; sums are distinct from DevDesk"
+      },
+      "agent_cli_processes": {
+        "samples": [],
+        "peak_sampled_footprint_sum_mb": 0
+      },
+      "exit_code": 0,
+      "measurements": [
+        {
+          "scenario": "seq",
+          "first_content_frame_ms": 608.41,
+          "pty_spawn_to_first_content_frame_ms": 19.298
+        },
+        {
+          "scenario": "seq",
+          "elapsed_ms": 3406.591,
+          "painted_frames": 338,
+          "max_paint_gap_ms": 11.033,
+          "queued_input_seen": false
+        }
+      ],
+      "peak_sampled_footprint_mb": 111.887,
+      "footprint_samples": [
+        {
+          "at_s": 0.0,
+          "footprint_mb": 0.082
+        },
+        {
+          "at_s": 0.098,
+          "footprint_mb": 13.206
+        },
+        {
+          "at_s": 0.151,
+          "footprint_mb": 20.399
+        },
+        {
+          "at_s": 0.206,
+          "footprint_mb": 55.199
+        },
+        {
+          "at_s": 0.266,
+          "footprint_mb": 70.632
+        },
+        {
+          "at_s": 0.367,
+          "footprint_mb": 70.665
+        },
+        {
+          "at_s": 0.419,
+          "footprint_mb": 70.714
+        },
+        {
+          "at_s": 0.479,
+          "footprint_mb": 70.764
+        },
+        {
+          "at_s": 0.529,
+          "footprint_mb": 70.764
+        },
+        {
+          "at_s": 0.627,
+          "footprint_mb": 70.764
+        },
+        {
+          "at_s": 0.684,
+          "footprint_mb": 70.764
+        },
+        {
+          "at_s": 0.737,
+          "footprint_mb": 70.796
+        },
+        {
+          "at_s": 0.788,
+          "footprint_mb": 111.265
+        },
+        {
+          "at_s": 0.888,
+          "footprint_mb": 111.265
+        },
+        {
+          "at_s": 0.94,
+          "footprint_mb": 111.265
+        },
+        {
+          "at_s": 0.995,
+          "footprint_mb": 111.789
+        },
+        {
+          "at_s": 1.045,
+          "footprint_mb": 111.789
+        },
+        {
+          "at_s": 1.149,
+          "footprint_mb": 111.789
+        },
+        {
+          "at_s": 1.203,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.263,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.314,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.412,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.472,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.527,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.578,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.682,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.733,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.789,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.842,
+          "footprint_mb": 111.805
+        },
+        {
+          "at_s": 1.938,
+          "footprint_mb": 111.838
+        },
+        {
+          "at_s": 1.998,
+          "footprint_mb": 111.838
+        },
+        {
+          "at_s": 2.054,
+          "footprint_mb": 111.838
+        },
+        {
+          "at_s": 2.111,
+          "footprint_mb": 111.838
+        },
+        {
+          "at_s": 2.207,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.261,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.313,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.371,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.476,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.526,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.577,
+          "footprint_mb": 111.855
+        },
+        {
+          "at_s": 2.628,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 2.734,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 2.794,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 2.846,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 2.904,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 3.005,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 3.063,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 3.115,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 3.175,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 3.269,
+          "footprint_mb": 111.871
+        },
+        {
+          "at_s": 3.32,
+          "footprint_mb": 111.887
+        },
+        {
+          "at_s": 3.371,
+          "footprint_mb": 111.887
+        },
+        {
+          "at_s": 3.432,
+          "footprint_mb": 111.887
+        },
+        {
+          "at_s": 3.536,
+          "footprint_mb": 111.887
+        }
+      ],
+      "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+    },
+    "claude": {
+      "scenario": "claude",
+      "managed_children": {
+        "samples": [],
+        "note": "external snapshots; sums are distinct from DevDesk"
+      },
+      "agent_cli_processes": {
+        "samples": [
+          {
+            "at_s": 0.842,
+            "count": 1,
+            "footprint_sum_mb": 66.651,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.103,
+            "count": 1,
+            "footprint_sum_mb": 124.094,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.374,
+            "count": 1,
+            "footprint_sum_mb": 125.699,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.647,
+            "count": 1,
+            "footprint_sum_mb": 125.699,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.922,
+            "count": 1,
+            "footprint_sum_mb": 124.716,
+            "agent_present": true
+          }
+        ],
+        "peak_sampled_footprint_sum_mb": 125.699
+      },
+      "exit_code": 0,
+      "measurements": [
+        {
+          "scenario": "claude",
+          "first_content_frame_ms": 843.153,
+          "pty_spawn_to_first_content_frame_ms": 280.381
+        }
+      ],
+      "peak_sampled_footprint_mb": 73.123,
+      "footprint_samples": [
+        {
+          "at_s": 0.0,
+          "footprint_mb": 0.115
+        },
+        {
+          "at_s": 0.097,
+          "footprint_mb": 13.19
+        },
+        {
+          "at_s": 0.149,
+          "footprint_mb": 20.284
+        },
+        {
+          "at_s": 0.201,
+          "footprint_mb": 54.887
+        },
+        {
+          "at_s": 0.253,
+          "footprint_mb": 70.616
+        },
+        {
+          "at_s": 0.354,
+          "footprint_mb": 70.665
+        },
+        {
+          "at_s": 0.414,
+          "footprint_mb": 70.714
+        },
+        {
+          "at_s": 0.467,
+          "footprint_mb": 70.763
+        },
+        {
+          "at_s": 0.527,
+          "footprint_mb": 70.763
+        },
+        {
+          "at_s": 0.628,
+          "footprint_mb": 70.763
+        },
+        {
+          "at_s": 0.68,
+          "footprint_mb": 70.78
+        },
+        {
+          "at_s": 0.737,
+          "footprint_mb": 72.402
+        },
+        {
+          "at_s": 0.797,
+          "footprint_mb": 72.402
+        },
+        {
+          "at_s": 0.896,
+          "footprint_mb": 72.402
+        },
+        {
+          "at_s": 0.947,
+          "footprint_mb": 72.402
+        },
+        {
+          "at_s": 1.0,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.054,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.156,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.211,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.262,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.319,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.427,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.478,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.53,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.588,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.702,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.753,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.805,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.861,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 1.973,
+          "footprint_mb": 73.123
+        },
+        {
+          "at_s": 2.024,
+          "footprint_mb": 73.123
+        }
+      ],
+      "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+    },
+    "codex": {
+      "scenario": "codex",
+      "managed_children": {
+        "samples": [],
+        "note": "external snapshots; sums are distinct from DevDesk"
+      },
+      "agent_cli_processes": {
+        "samples": [
+          {
+            "at_s": 0.839,
+            "count": 2,
+            "footprint_sum_mb": 48.827,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.111,
+            "count": 2,
+            "footprint_sum_mb": 64.687,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.379,
+            "count": 4,
+            "footprint_sum_mb": 258.249,
+            "agent_present": true
+          },
+          {
+            "at_s": 1.647,
+            "count": 4,
+            "footprint_sum_mb": 207.328,
+            "agent_present": true
+          }
+        ],
+        "peak_sampled_footprint_sum_mb": 258.249
+      },
+      "exit_code": 0,
+      "measurements": [
+        {
+          "scenario": "codex",
+          "first_content_frame_ms": 636.721,
+          "pty_spawn_to_first_content_frame_ms": 59.56
+        }
+      ],
+      "peak_sampled_footprint_mb": 92.128,
+      "footprint_samples": [
+        {
+          "at_s": 0.0,
+          "footprint_mb": 0.082
+        },
+        {
+          "at_s": 0.096,
+          "footprint_mb": 13.337
+        },
+        {
+          "at_s": 0.155,
+          "footprint_mb": 20.71
+        },
+        {
+          "at_s": 0.205,
+          "footprint_mb": 55.035
+        },
+        {
+          "at_s": 0.265,
+          "footprint_mb": 70.649
+        },
+        {
+          "at_s": 0.366,
+          "footprint_mb": 70.682
+        },
+        {
+          "at_s": 0.418,
+          "footprint_mb": 70.714
+        },
+        {
+          "at_s": 0.479,
+          "footprint_mb": 70.78
+        },
+        {
+          "at_s": 0.53,
+          "footprint_mb": 70.796
+        },
+        {
+          "at_s": 0.63,
+          "footprint_mb": 70.796
+        },
+        {
+          "at_s": 0.681,
+          "footprint_mb": 70.796
+        },
+        {
+          "at_s": 0.736,
+          "footprint_mb": 72.402
+        },
+        {
+          "at_s": 0.793,
+          "footprint_mb": 90.817
+        },
+        {
+          "at_s": 0.899,
+          "footprint_mb": 91.932
+        },
+        {
+          "at_s": 0.95,
+          "footprint_mb": 91.932
+        },
+        {
+          "at_s": 1.0,
+          "footprint_mb": 91.932
+        },
+        {
+          "at_s": 1.056,
+          "footprint_mb": 91.932
+        },
+        {
+          "at_s": 1.166,
+          "footprint_mb": 91.932
+        },
+        {
+          "at_s": 1.219,
+          "footprint_mb": 91.932
+        },
+        {
+          "at_s": 1.27,
+          "footprint_mb": 91.981
+        },
+        {
+          "at_s": 1.33,
+          "footprint_mb": 92.095
+        },
+        {
+          "at_s": 1.44,
+          "footprint_mb": 92.128
+        },
+        {
+          "at_s": 1.492,
+          "footprint_mb": 92.128
+        },
+        {
+          "at_s": 1.542,
+          "footprint_mb": 92.128
+        },
+        {
+          "at_s": 1.6,
+          "footprint_mb": 92.128
+        },
+        {
+          "at_s": 1.7,
+          "footprint_mb": 92.128
+        },
+        {
+          "at_s": 1.75,
+          "footprint_mb": 92.128
+        },
+        {
+          "at_s": 1.801,
+          "footprint_mb": 92.128
+        }
+      ],
+      "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"
+    }
+  },
+  "scrollback_memory": {
+    "columns": 120,
+    "rows": 40,
+    "history_cap": 5000,
+    "inline_cell_bytes": 24,
+    "history_inline_floor_mb": 14.4,
+    "record": "memory-probe.json",
+    "method": "Fresh headless release process per scenario, macOS getrusage peak RSS; samples at 5000/10000/20000 lines. Both grids and allocator/metadata included. Not GUI footprint.",
+    "limits": "8 combining marks/cell, 256 live links/terminal, 8192 URI bytes, 256 ID bytes, 160 KiB OSC payload; see vendor/README.md"
+  },
+  "managed_child_processes": {
+    "count_at_end": 1,
+    "footprint_sum_mb": 4.83376,
+    "cpu_percent_common_pids": 0.0,
+    "same_pids_entire_interval": true
+  },
+  "agent_cli_processes_managed_by_devdesk": {
+    "count": 0,
+    "footprint_sum_mb": 0,
+    "cpu_percent": 0
+  },
+  "agent_cli_note": "Agent scenario trees are separate from DevDesk footprint, include configured CLI subprocesses, and cover startup only. CLI first content is not authentication/readiness. Versions: Claude Code 2.1.295, codex-cli 0.162.0; no model prompt submitted.",
+  "previous_milestone_record": "baseline-m0.json",
+  "previous_machine_record": "baseline-old-machine.json",
+  "a11_controls_record": "a11-empty-window.json",
+  "reproduce": "./scripts/check.sh && ./scripts/perf/run.sh"
+}

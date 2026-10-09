@@ -62,6 +62,7 @@ Each ADR uses the format: Context → Decision → Consequences → Revisit when
 **Decision:** `alacritty_terminal =0.26.0` for parsing and grid state. DevDesk writes its own GPUI renderer (batched text runs and background rects) and key encoder (kitty protocol), adapted from the Apache-2.0 `alacritty` crate and MIT/Apache `gpui-terminal`. Zed's GPL terminal code is never copied.
 **Rejected:** `wezterm-term` (git-only dependency), `vt100` (too limited), `libghostty-vt` (Zig build dependency, pre-1.0; revisit 2027).
 **Consequences:** Must answer terminal queries (PtyWrite, ColorRequest) ourselves. Pin exactly, because minor versions break.
+**Implementation evidence (M1, 🧪):** A10 confirmed unbounded per-cell/OSC metadata in the pinned registry sources. Narrow attributed local patches bound that metadata without changing the versions or APIs; see [vendor/README.md](../vendor/README.md) and technical-research §10d.
 **Revisit when:** libghostty offers a stable, pure-cargo build.
 
 ### ADR-004: PTY management

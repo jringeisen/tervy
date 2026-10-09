@@ -1,0 +1,53 @@
+{
+  "agent": "codex",
+  "version": "codex-cli 0.162.0",
+  "argv": [
+    "codex",
+    "--no-daemon"
+  ],
+  "date": "2026-10-08",
+  "dimensions": {
+    "columns": 120,
+    "rows": 40,
+    "cell_width": 8,
+    "cell_height": 18
+  },
+  "method": "real CLI startup in PTY, no submitted prompt; protocol probes only",
+  "first_pty_output_ms": 41.77799999888521,
+  "exchanges": [
+    {
+      "query_hex": "1b5b366e",
+      "reply_hex": "1b5b313b3152",
+      "at_ms": 41.909
+    },
+    {
+      "query_hex": "1b5d31303b3f1b5c",
+      "reply_hex": "1b5d31303b7267623a643864382f646564652f653965391b5c",
+      "at_ms": 41.939
+    },
+    {
+      "query_hex": "1b5d31313b3f1b5c",
+      "reply_hex": "1b5d31313b7267623a323032302f323432342f326332631b5c",
+      "at_ms": 41.947
+    },
+    {
+      "query_hex": "1b5b3f75",
+      "reply_hex": "1b5b3f3075",
+      "at_ms": 41.952
+    },
+    {
+      "query_hex": "1b5b63",
+      "reply_hex": "1b5b3f3663",
+      "at_ms": 41.957
+    }
+  ],
+  "keys": [
+    {
+      "key": "Enter",
+      "shift": true,
+      "injected_at_ms": 4047.15,
+      "legacy_hex": "1b5b31333b3275",
+      "kitty_flags_1_hex": "1b5b31333b3275"
+    }
+  ]
+}

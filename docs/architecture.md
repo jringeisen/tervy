@@ -535,3 +535,20 @@ Final-pass additions:
 - **ADR-027's first design (DECSTR soft reset) would not have worked.** vte ignores DECSTR, and RIS wipes the grid (D1, verified in source). Modes are now reset via `Term`'s `Handler` methods.
 - **Codex `apply_patch` is confirmed enforced** under read-only + `approval_policy="never"` (C3).
 - **Lock discipline gained rule 5:** the `EventProxy` runs under the `Term` lock.
+
+M1 implementation evidence (🧪, replacement machine): the snapshot race now has
+a deterministic test using the real snapshot method blocked on `Term`; direct
+child probes confirm default/unblocked signals. A10 stress exposed unbounded
+metadata in pinned upstream sources, now bounded by attributed local patches.
+CPR/DA writes bypass the UI; bounded color/size queries have their own priority
+queue, separate from title/clipboard metadata. See [M1 review](m1-review.md).
+
+M2 implementation evidence (🧪, replacement machine): the supervisor now owns
+all PTYs; views retain only terminal handles and lifecycle mirrors. Background
+process groups and leaderless survivors are covered by macOS SDK session
+sweeps, guarded by process birth times. Stop-during-spawn and stale launch
+approvals are tested. Configuration watching canonicalizes the path because
+FSEvents reports `/private/var` where callers may use `/var`. Activation uses a
+separate private Unix datagram socket and the lifetime `flock`; hook IPC remains
+M4. The stress-only three-pane view exercises ten output producers and a quiet
+input pane without introducing production split controls. See [M2 review](m2-review.md).

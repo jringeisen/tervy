@@ -53,3 +53,25 @@ fn now_ns() -> u128 {
         .map(|elapsed| elapsed.as_nanos())
         .unwrap_or_default()
 }
+
+/// Opt-in startup attribution without attaching a sampler/debugger, whose
+/// dyld notifications can themselves delay framework loading on macOS.
+pub fn phase(name: &'static str) -> Option<Phase> {
+    std::env::var_os("DEVDESK_PERF_PHASES").map(|_| Phase {
+        name,
+        started: std::time::Instant::now(),
+    })
+}
+pub struct Phase {
+    name: &'static str,
+    started: std::time::Instant,
+}
+impl Drop for Phase {
+    fn drop(&mut self) {
+        eprintln!(
+            "devdesk-phase {} {:.3} ms",
+            self.name,
+            self.started.elapsed().as_secs_f64() * 1000.
+        );
+    }
+}

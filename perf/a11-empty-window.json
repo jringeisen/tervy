@@ -1,0 +1,45 @@
+{
+  "recorded": "2026-10-08",
+  "evidence": "🧪 locally measured before terminal implementation",
+  "machine": "Mac14,6 / M2 Max / 96 GB / macOS 27.0.1",
+  "build": "gpui-kit =0.7.1, gpui-pre-macos =0.3.8, release",
+  "runs": [
+    {
+      "layout": "normal",
+      "settle_s": 10,
+      "elapsed_s": 30.003545165993273,
+      "cpu_percent": 0.663583110701852,
+      "footprint_mb": 63.521752,
+      "package_idle_wakeups_per_s": 1.16652881539045,
+      "interrupt_wakeups_per_s": 120.31911495884357,
+      "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB",
+      "nanoseconds_per_cpu_tick": 41.666666666666664
+    },
+    {
+      "layout": "no-sidebar",
+      "settle_s": 10,
+      "elapsed_s": 30.00451429199893,
+      "cpu_percent": 0.6746779213397057,
+      "footprint_mb": 63.30876,
+      "package_idle_wakeups_per_s": 0.9331929098237908,
+      "interrupt_wakeups_per_s": 120.34855704906101,
+      "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB",
+      "nanoseconds_per_cpu_tick": 41.666666666666664
+    },
+    {
+      "layout": "minimal",
+      "settle_s": 10,
+      "elapsed_s": 30.001524499995867,
+      "cpu_percent": 0.6339393130951045,
+      "cpu_tick_delta": 4564595,
+      "nanoseconds_per_cpu_tick": 41.666666666666664,
+      "footprint_mb": 60.13024,
+      "package_idle_wakeups_per_s": 0.9666175463851511,
+      "interrupt_wakeups_per_s": 120.36055034471657,
+      "method": "macOS proc_pid_rusage RUSAGE_INFO_V0; deltas / monotonic elapsed time; decimal MB"
+    }
+  ],
+  "cpu_sampler_validation": "Single busy Python process: 100.3%; Mach CPU ticks converted with mach_timebase_info (125/3 ns per tick on this machine).",
+  "finding": "CoreVideo display link runs while visible, even with blank content. No continuing workspace renders after startup. Sidebar removal has no material effect. No public backend pause/rearm API. A11 remains an upstream limitation; no dependency patch or pin change.",
+  "note": "Package-idle wakeups and interrupt wakeups are separate cumulative counters. Native sampler does not run top during the measured interval. These 30 s controls establish attribution; final M1 idle acceptance uses 60 s."
+}

@@ -1,6 +1,6 @@
 # DevDesk — Implementation Plan
 
-Status: **Proposed**. No application code is written until this plan is approved.
+Status: **Approved; implementing milestones with owner review.** M0–M2 are approved; M3 has not started.
 
 Sizing: **S** ≈ under a day, **M** ≈ 2–4 days, **L** ≈ 1–2 weeks of focused, Claude-assisted work with owner review. These are relative sizes for ordering and risk, not commitments.
 
@@ -50,7 +50,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 - `scripts/check.sh` is green.
 - Baseline cold start recorded (empty window).
 
-**Migration review (2026-10-08):** 🧪 Rebuilt on the replacement M2 Max Mac; `scripts/check.sh` passes after owner-approved removal of AirDrop quarantine metadata from source/build paths. Current measurements are in `perf/baseline.json`; the original machine's record is preserved in `perf/baseline-old-machine.json`. Owner approved M0 and requested its initial publication to a private `jringeisen/devdesk` GitHub repository. Memory and CPU budget misses remain recorded for the A11 investigation at the start of M1. See technical-research §10b.
+**Migration review (2026-10-08):** 🧪 Rebuilt on the replacement M2 Max Mac; `scripts/check.sh` passes after owner-approved removal of AirDrop quarantine metadata from source/build paths. M0 measurements are preserved in `perf/baseline-m0.json`; the original machine's record is preserved in `perf/baseline-old-machine.json`. Owner approved M0 and requested its initial publication to a private `jringeisen/devdesk` GitHub repository. Memory and CPU budget misses remain recorded for the A11 investigation at the start of M1. See technical-research §10b.
 
 **Risks:** GPUI build friction. Mitigation: 0.2 is a timeboxed spike (½ day) before anything else.
 
@@ -103,6 +103,8 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 ---
 
+**M1 implementation review (2026-10-08):** 🧪 The terminal implementation, protocol/stress tests and local performance harness are ready for [owner review](m1-review.md). 🧪 Owner approved the running M1 window on 2026-10-08 (“looks good lets continue”), authorizing M2. Owner requested committing M1 together with M2. A11 and A10 findings are in technical-research §10c/§10d.
+
 ## M2 — Projects, tabs, shell lifecycle (M–L)
 
 **Delivers:** DevDesk replaces your terminal tabs. Multiple projects, multiple shells each, instant switching, clean shutdown.
@@ -131,6 +133,8 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 **Tests:** supervisor state tests with a fake clock; kill-tree integration tests (process group, background jobs, a process that ignores SIGHUP); config parse/validate unit tests.
 
 ---
+
+**M2 implementation review (2026-10-08):** 🧪 Tasks 2.1–2.8, lifecycle integration tests and a bounded eleven-session stress probe are implemented. See [M2 review](m2-review.md) and the current `perf/baseline.json`. 🧪 Owner approved the running M2 window (“Looks good!”). Owner requested committing M1 and M2, then starting M3.
 
 ## M3 — Process management (M–L)
 
@@ -277,7 +281,7 @@ Every measurement reports **three separate numbers**: (1) DevDesk's own process 
 | Cold start → first frame | **< 500 ms** p50 (10 runs) | `scripts/perf/startup.sh` + `DEVDESK_PERF` timestamps |
 | Idle memory, no terminals | < 60 MB | `footprint <pid>` |
 | Idle memory, 20 idle shells (empty scrollback) | **< 100 MB** | same |
-| Scrollback memory | ≈ lines × cols × bytes/cell ❓ (A10; ~24 B/cell gives 5,000 × 120 × 24 ≈ **14 MB per full terminal**) | Measured in M1. Informs the default cap |
+| Scrollback memory | 🧪 inline floor: lines × cols × 24 B/cell; 5,000 × 120 ≈ **14.4 MB**. Headless measured ~19.1 MB plain/styled; all-combining ~77 MB | M1 measured; metadata/allocator add to the floor (technical-research §10d) |
 | Idle CPU (20 idle sessions) | **< 0.3 %** avg over 60 s; **0** DevDesk timer wakeups | `top -l`, `powermetrics --samplers tasks` |
 | Project switch | **< 50 ms** to presented frame (aim: 1 frame) | Instrumented action → frame timestamp |
 | Keystroke → PTY write | < 2 ms p99 | Instrumented |
@@ -288,7 +292,7 @@ Every measurement reports **three separate numbers**: (1) DevDesk's own process 
 
 **Note on memory:**
 - Bytes per cell is a floor, not a bound. alacritty's `CellExtra` grows with combining characters and hyperlinks ✅. M1 measures adversarial output (heavy styling, combining marks, OSC 8 links) as well as plain text, and caps per-cell metadata if needed.
-- "< 100 MB idle" is achievable only with **empty or modest** scrollback. Twenty terminals with full 5,000-line scrollback at 120 columns could add about 280 MB (estimate pending A10). This is user-controlled memory, not overhead. The perf report shows it separately.
+- "< 100 MB idle" is achievable only with **empty or modest** scrollback. Twenty terminals with full 5,000-line scrollback at 120 columns have an inline floor around 288 MB, before allocator/metadata (🧪 A10 cell size; total remains a multi-session estimate). This is user-controlled memory, not overhead. The perf report shows it separately.
 
 **Regression process:**
 - `scripts/perf/run.sh` writes JSON; `perf/baseline.json` is committed in M1 and updated deliberately.
