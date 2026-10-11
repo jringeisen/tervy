@@ -35,6 +35,7 @@ fn record(project: &str, folder: &std::path::Path) -> Record {
         name: "Saved Claude".into(),
         cwd: folder.into(),
         role: Role::Primary,
+        launch_args: vec![],
         provider: devdesk_core::agent::Provider::Claude,
         parent: None,
         snapshot_at: None,

@@ -1,5 +1,11 @@
 # DevDesk — Agent Integration
 
+The launch and read-only MCP details below describe the earlier milestones.
+The current Library integration adds a Tervy-owned MCP server to primary agents
+and gives Claude/Codex side conversations only its read tools. See
+[Library and Tervy MCP](prompts-mcp.md) for the current tool and permission
+contract.
+
 Status: **Proposed**. Evidence markers (✅ 🧪 📘 ❓) follow [technical-research.md](technical-research.md#how-to-read-this-document). Versions verified: Claude Code 2.1.295, codex-cli 0.161.0.
 
 🧪 Replacement-machine M1 terminal startup fixtures cover Claude Code 2.1.295 and

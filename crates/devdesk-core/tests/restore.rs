@@ -35,6 +35,7 @@ fn restores_shell_cwd_and_agent_stub_without_launching_primary_or_side_records()
         name: "Saved Claude".into(),
         cwd: folder.clone(),
         role: Role::Primary,
+        launch_args: vec![],
         provider: devdesk_core::agent::Provider::Claude,
         parent: None,
         snapshot_at: None,
@@ -45,6 +46,7 @@ fn restores_shell_cwd_and_agent_stub_without_launching_primary_or_side_records()
         .save_agent(&Record {
             id: uuid::Uuid::new_v4().to_string(),
             role: Role::Side,
+            launch_args: vec![],
             provider: devdesk_core::agent::Provider::Claude,
             parent: Some(record.id.clone()),
             snapshot_at: Some(1_791_518_400),
@@ -54,6 +56,7 @@ fn restores_shell_cwd_and_agent_stub_without_launching_primary_or_side_records()
     let key = format!("agent:{}", record.id);
     let mut layout = Layout {
         sidebar_width: Some(320.),
+        sidebar_collapsed: false,
         active_project: Some("p".into()),
         selected: vec![key.clone()],
         expanded: vec!["p".into()],

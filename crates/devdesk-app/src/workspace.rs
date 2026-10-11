@@ -1,24 +1,36 @@
 //! UI mirror of the supervisor. All terminal entities remain alive across tab
 //! and project switches; only selected entities are attached to the render tree.
+mod agent_form;
+mod agent_form_smoke;
 mod customization_smoke;
+mod meetings_view;
+mod modal_focus_smoke;
 mod process_form;
+mod prompts_smoke;
+mod prompts_view;
+mod setup_view;
 mod side_smoke;
+mod sidebar_navigation;
+mod sidebar_smoke;
 use crate::terminal_view::TerminalView;
 use devdesk_core::config::{Config, Project};
 use devdesk_core::supervisor::{
     Command as CoreCommand, CoreEvent, SessionId, SessionInfo, SessionStatus, SupervisorHandle,
 };
-use devdesk_core::{agent, layout};
+use devdesk_core::{agent, layout, meetings, prompts};
+use gpui_kit::base::Disableable as _;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::command::{Command, CommandItem, CommandState};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::resizable::{ResizableState, h_resizable, resizable_panel};
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Icon, IconName, Sizable, Theme, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, IconName, Sizable, Theme, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
+use sidebar_navigation::SidebarRow;
+pub(crate) use sidebar_navigation::key_bindings as sidebar_key_bindings;
 use std::collections::{BTreeMap, BTreeSet};
 
 gpui_kit::actions!(
@@ -40,7 +52,15 @@ gpui_kit::actions!(
         Tab6,
         Tab7,
         Tab8,
-        Tab9
+        Tab9,
+        FocusSidebar,
+        ToggleSidebar,
+        SidebarUp,
+        SidebarDown,
+        SidebarActivate,
+        SidebarCollapse,
+        SidebarExpand,
+        SidebarExit
     ]
 );
 
@@ -67,6 +87,7 @@ enum PaletteAction {
     Close,
     Rename,
     Add,
+    Setup,
     Start(SessionId),
     Stop(SessionId),
     Restart(SessionId),
@@ -85,11 +106,16 @@ enum PaletteAction {
     ToggleProject(String),
     ResizeSide(i32),
     ResizeSidebar(i32),
+    ToggleSidebar,
     OpenUrl(String),
 }
 
 pub struct Workspace {
     focus: FocusHandle,
+    sidebar_focus: FocusHandle,
+    sidebar_cursor: Option<SidebarRow>,
+    sidebar_scroll_pending: bool,
+    sidebar_scroll: ScrollHandle,
     restoring: bool,
     last_layout: Option<layout::Layout>,
     approvals: usize,
@@ -97,6 +123,28 @@ pub struct Workspace {
     core: SupervisorHandle,
     config: Config,
     projects: Vec<Project>,
+    prompts_open: bool,
+    meetings_open: bool,
+    prompts_expanded: bool,
+    meetings_expanded: bool,
+    meetings: Vec<meetings::Meeting>,
+    meeting_selected: Option<String>,
+    meeting_error: Option<String>,
+    meeting_timer_running: bool,
+    meeting_title_input: Entity<InputState>,
+    meeting_notes_input: Entity<TextareaState>,
+    meeting_notes_editing: bool,
+    prompts: Vec<prompts::Summary>,
+    prompt_next_offset: Option<usize>,
+    prompt_searching: bool,
+    prompt_selected: Option<String>,
+    prompt_loaded: Option<prompts::Prompt>,
+    prompt_new: bool,
+    prompt_saving: bool,
+    prompt_error: Option<String>,
+    prompt_search_input: Entity<InputState>,
+    prompt_title_input: Entity<InputState>,
+    prompt_body_input: Entity<TextareaState>,
     tabs: BTreeMap<SessionId, ShellTab>,
     memory: BTreeMap<SessionId, (devdesk_core::supervisor::LaunchId, Option<u64>)>,
     // Session IDs change on restore; presentation order follows saved identities.
@@ -110,6 +158,9 @@ pub struct Workspace {
     error: Option<String>,
     palette: Entity<CommandState>,
     palette_open: bool,
+    setup_open: bool,
+    readiness: Option<crate::setup::Readiness>,
+    checking_setup: bool,
     palette_query: String,
     rename: Option<SessionId>,
     question_parent: Option<SessionId>,
@@ -121,6 +172,7 @@ pub struct Workspace {
     /// final width on mouse-up, never every pointer movement.
     sidebar_state: Entity<ResizableState>,
     sidebar_width: f32,
+    sidebar_collapsed: bool,
     split_states: BTreeMap<SessionId, Entity<ResizableState>>,
     side_panes: BTreeMap<SessionId, SessionId>,
     side_focus: Option<SessionId>,
@@ -130,6 +182,9 @@ pub struct Workspace {
     process_command_input: Entity<InputState>,
     process_error: Option<String>,
     process_saving: bool,
+    agent_launch: Option<agent_form::AgentLaunch>,
+    agent_args_input: Entity<InputState>,
+    agent_launch_error: Option<String>,
     prompt_pending: bool,
     shutdown: Option<usize>,
     _tasks: Vec<Task<()>>,
@@ -152,6 +207,48 @@ impl Workspace {
             }
         });
         let process_name_input = cx.new(|cx| InputState::new(window, cx));
+        let prompt_search_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Search titles and text"));
+        let prompt_title_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Prompt title"));
+        let prompt_body_input =
+            cx.new(|cx| TextareaState::new(window, cx).placeholder("Write a prompt…"));
+        let meeting_title_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Meeting title"));
+        let meeting_notes_input =
+            cx.new(|cx| TextareaState::new(window, cx).placeholder("Meeting notes"));
+        let prompt_search_subscription =
+            cx.subscribe_in(&prompt_search_input, window, |this, _, event, _, cx| {
+                if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {
+                    this.search_prompts(cx);
+                }
+            });
+        let prompt_title_subscription =
+            cx.subscribe_in(&prompt_title_input, window, |_, _, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+        let prompt_body_subscription =
+            cx.subscribe_in(&prompt_body_input, window, |_, _, event, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
+            });
+        let agent_args_input =
+            cx.new(|cx| InputState::new(window, cx).placeholder("Optional command-line arguments"));
+        let agent_args_subscription =
+            cx.subscribe_in(&agent_args_input, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::PressEnter { .. }) {
+                    this.launch_agent_from_form(window, cx);
+                } else if matches!(event, InputEvent::Change) {
+                    if this.agent_launch_error.is_some() {
+                        this.agent_launch_error =
+                            agent::parse_launch_args(&this.agent_args_input.read(cx).value()).err();
+                    }
+                    cx.notify();
+                }
+            });
         let process_command_input = cx.new(|cx| InputState::new(window, cx));
         let name_subscription =
             cx.subscribe_in(&process_name_input, window, |this, _, event, window, cx| {
@@ -186,6 +283,31 @@ impl Workspace {
             }
             let _ = weak.update(cx, |this, cx| {
                 this.ready = true;
+                if this.perf_layout.is_empty() {
+                    this.check_setup(cx);
+                }
+                if this.perf_layout == "sidebar" {
+                    if !this.projects.is_empty() {
+                        this.smoke_sidebar(window, cx);
+                    }
+                    return;
+                }
+                if this.perf_layout == "setup" {
+                    this.smoke_setup(window, cx);
+                    return;
+                }
+                if this.perf_layout == "agent-launch" {
+                    this.smoke_agent_form(window, cx);
+                    return;
+                }
+                if this.perf_layout == "modal-focus" {
+                    this.smoke_modal_focus(window, cx);
+                    return;
+                }
+                if this.perf_layout == "prompts" {
+                    this.smoke_prompts(window, cx);
+                    return;
+                }
                 if this.perf_layout == "quit" {
                     let weak = cx.weak_entity();
                     window.on_next_frame(move |window, cx| {
@@ -257,6 +379,10 @@ impl Workspace {
         });
         Self {
             focus,
+            sidebar_focus: cx.focus_handle(),
+            sidebar_cursor: None,
+            sidebar_scroll_pending: false,
+            sidebar_scroll: ScrollHandle::new(),
             restoring: std::env::var_os("DEVDESK_PERF_LAYOUT").is_none(),
             last_layout: None,
             approvals: 0,
@@ -265,6 +391,28 @@ impl Workspace {
             core,
             config: Config::default(),
             projects: vec![],
+            prompts_open: false,
+            meetings_open: false,
+            prompts_expanded: false,
+            meetings_expanded: false,
+            meetings: vec![],
+            meeting_selected: None,
+            meeting_error: None,
+            meeting_timer_running: false,
+            meeting_title_input,
+            meeting_notes_input,
+            meeting_notes_editing: false,
+            prompts: vec![],
+            prompt_next_offset: None,
+            prompt_searching: false,
+            prompt_selected: None,
+            prompt_loaded: None,
+            prompt_new: false,
+            prompt_saving: false,
+            prompt_error: None,
+            prompt_search_input,
+            prompt_title_input,
+            prompt_body_input,
             tabs: BTreeMap::new(),
             memory: BTreeMap::new(),
             tab_order: vec![],
@@ -277,6 +425,10 @@ impl Workspace {
             error: None,
             palette,
             palette_open: false,
+            setup_open: std::env::var_os("DEVDESK_PERF_LAYOUT").is_none()
+                && crate::setup::welcome_needed(&devdesk_core::config::support_directory()),
+            readiness: None,
+            checking_setup: false,
             palette_query: String::new(),
             rename: None,
             question_parent: None,
@@ -285,6 +437,7 @@ impl Workspace {
             customization_notice: None,
             sidebar_state: cx.new(|_| ResizableState::default()),
             sidebar_width: 280.,
+            sidebar_collapsed: false,
             split_states: BTreeMap::new(),
             side_panes: BTreeMap::new(),
             side_focus: None,
@@ -294,10 +447,21 @@ impl Workspace {
             process_command_input,
             process_error: None,
             process_saving: false,
+            agent_launch: None,
+            agent_args_input,
+            agent_launch_error: None,
             prompt_pending: false,
             shutdown: None,
             _tasks: vec![task],
-            _subscriptions: vec![subscription, name_subscription, command_subscription],
+            _subscriptions: vec![
+                subscription,
+                name_subscription,
+                command_subscription,
+                agent_args_subscription,
+                prompt_search_subscription,
+                prompt_title_subscription,
+                prompt_body_subscription,
+            ],
         }
     }
     fn empty_control(&self) -> bool {
@@ -310,6 +474,10 @@ impl Workspace {
                 | "idle20"
                 | "scrollback20"
                 | "quit"
+                | "sidebar"
+                | "sidebar-running"
+                | "agent-launch"
+                | "modal-focus"
         )
     }
     fn active(&self) -> Option<SessionId> {
@@ -333,6 +501,176 @@ impl Workspace {
     }
     fn event(&mut self, event: CoreEvent, window: &mut Window, cx: &mut Context<Self>) {
         match event {
+            CoreEvent::MeetingsListed(meetings) => {
+                self.meetings = meetings;
+                if self.meeting_selected.is_none()
+                    && let Some(id) = self.meetings.first().map(|meeting| meeting.id.clone())
+                {
+                    self.select_meeting(id, window, cx);
+                }
+                cx.notify();
+            }
+            CoreEvent::MeetingUpdated(meeting) => {
+                let previous = self
+                    .meetings
+                    .iter()
+                    .find(|item| item.id == meeting.id)
+                    .cloned();
+                if self.meeting_selected.as_ref() == Some(&meeting.id) {
+                    let old_notes = previous
+                        .as_ref()
+                        .map(|item| item.notes.as_str())
+                        .unwrap_or("");
+                    if self.meeting_notes_input.read(cx).value().as_ref() == old_notes {
+                        self.meeting_notes_input.update(cx, |input, cx| {
+                            input.set_value(meeting.notes.clone(), window, cx)
+                        });
+                    }
+                    let old_title = previous
+                        .as_ref()
+                        .map(|item| item.title.as_str())
+                        .unwrap_or("");
+                    if self.meeting_title_input.read(cx).value().as_ref() == old_title {
+                        self.meeting_title_input.update(cx, |input, cx| {
+                            input.set_value(meeting.title.clone(), window, cx)
+                        });
+                    }
+                }
+                if let Some(item) = self.meetings.iter_mut().find(|item| item.id == meeting.id) {
+                    *item = meeting.clone();
+                } else {
+                    self.meetings.insert(0, meeting.clone());
+                }
+                self.meetings
+                    .sort_by_key(|item| std::cmp::Reverse(item.started_at));
+                if self.meeting_selected.is_none()
+                    || (previous.is_none() && meeting.status == meetings::Status::Starting)
+                {
+                    self.select_meeting(meeting.id.clone(), window, cx);
+                }
+                if meeting.status == meetings::Status::Recording {
+                    self.start_meeting_timer(cx);
+                }
+                cx.notify();
+            }
+            CoreEvent::MeetingDeleted(id) => {
+                self.meetings.retain(|meeting| meeting.id != id);
+                if self.meeting_selected.as_ref() == Some(&id) {
+                    self.meeting_selected = None;
+                }
+                cx.notify();
+            }
+            CoreEvent::MeetingError(error) => {
+                self.meeting_error = Some(error);
+                cx.notify();
+            }
+            CoreEvent::PromptsListed {
+                query,
+                offset,
+                items,
+            } => {
+                if query == self.prompt_search_input.read(cx).value().as_ref() {
+                    let length = items.len();
+                    let accepted = if offset == 0 {
+                        self.prompts = items;
+                        self.prompt_searching = false;
+                        true
+                    } else if offset == self.prompts.len() {
+                        self.prompts.extend(items);
+                        true
+                    } else {
+                        false
+                    };
+                    if accepted {
+                        self.prompt_next_offset = (length == 100).then_some(offset + length);
+                    }
+                    cx.notify();
+                }
+            }
+            CoreEvent::PromptRead { id, prompt } => {
+                if self.prompt_selected.as_ref() != Some(&id) {
+                    return;
+                }
+                if let Some(prompt) = prompt {
+                    self.load_prompt(prompt, window, cx);
+                } else {
+                    self.prompt_error = Some("Prompt no longer exists".into());
+                    cx.notify();
+                }
+            }
+            CoreEvent::PromptSaved { prompt, from_ui } => {
+                let should_load = (from_ui && self.prompt_saving)
+                    || (self.prompt_selected.as_ref() == Some(&prompt.id)
+                        && !self.prompt_is_dirty(cx));
+                if from_ui {
+                    self.prompt_saving = false;
+                }
+                if should_load {
+                    self.prompt_selected = Some(prompt.id.clone());
+                    self.prompt_new = false;
+                    self.load_prompt(prompt, window, cx);
+                } else if self.prompt_selected.as_ref() == Some(&prompt.id) {
+                    self.prompt_error = Some("This prompt changed in an agent. Save your draft elsewhere, then reload it.".into());
+                }
+                self.refresh_prompts(cx);
+                cx.notify();
+            }
+            CoreEvent::PromptDeleted(id) => {
+                if self.prompt_selected.as_ref() == Some(&id) {
+                    let keep_draft = self.prompt_is_dirty(cx);
+                    self.prompt_selected = None;
+                    self.prompt_loaded = None;
+                    self.prompt_new = keep_draft;
+                    if keep_draft {
+                        self.prompt_error = Some("The saved prompt was deleted. You can save this draft as a new prompt.".into());
+                    } else {
+                        self.prompt_title_input
+                            .update(cx, |input, cx| input.set_value("", window, cx));
+                        self.prompt_body_input
+                            .update(cx, |input, cx| input.set_value("", window, cx));
+                    }
+                }
+                self.refresh_prompts(cx);
+                cx.notify();
+            }
+            CoreEvent::PromptDeleteApproval {
+                request_id,
+                title,
+                agent,
+            } => {
+                if self.prompt_pending {
+                    self.core.send(CoreCommand::ResolvePromptDelete {
+                        request_id,
+                        approved: false,
+                    });
+                } else {
+                    self.prompt_pending = true;
+                    let answer = window.prompt(
+                        PromptLevel::Warning,
+                        "Delete saved prompt?",
+                        Some(&format!("{agent} requested deletion of ‘{title}’.")),
+                        &["Cancel", "Delete prompt"],
+                        cx,
+                    );
+                    self._tasks.push(cx.spawn(async move |view, cx| {
+                        let approved = answer.await == Ok(1);
+                        let _ = view.update(cx, |this, cx| {
+                            this.prompt_pending = false;
+                            this.core.send(CoreCommand::ResolvePromptDelete {
+                                request_id,
+                                approved,
+                            });
+                            cx.notify();
+                        });
+                    }));
+                }
+            }
+            CoreEvent::PromptError(error) => {
+                self.prompt_saving = false;
+                self.prompt_searching = false;
+                self.prompt_error = Some(error);
+                cx.notify();
+            }
             CoreEvent::MemoryUsage(samples) => {
                 for (id, launch, bytes) in samples {
                     if self
@@ -381,6 +719,7 @@ impl Workspace {
                         .unwrap_or(280.)
                         .clamp(220., 520.);
                     self.sidebar_state = cx.new(|_| ResizableState::default());
+                    self.sidebar_collapsed = layout.sidebar_collapsed;
                     self.expanded = layout.expanded.into_iter().collect();
                     self.active_project = layout
                         .active_project
@@ -423,7 +762,7 @@ impl Workspace {
                     .join("\n");
                 let answer = window.prompt(
                     PromptLevel::Warning,
-                    "Processes from the previous DevDesk run are still running",
+                    "Processes from the previous Tervy run are still running",
                     Some(&summary),
                     &["Leave running", "Stop previous processes"],
                     cx,
@@ -490,6 +829,9 @@ impl Workspace {
                     && let Some(project) = self.projects.first()
                 {
                     self.open_project(project.id.clone(), window, cx);
+                }
+                if self.ready && self.perf_layout == "sidebar" {
+                    self.smoke_sidebar(window, cx);
                 }
                 if self.ready && self.perf_layout == "customization" {
                     self.smoke_customization(window, cx);
@@ -735,7 +1077,7 @@ impl Workspace {
                 };
                 (
                     project.name.clone(),
-                    "Stop this project's sessions and remove it from DevDesk. Files in its folder are kept.",
+                    "Stop this project's sessions and remove it from Tervy. Files in its folder are kept.",
                 )
             }
             RemovalTarget::Session(id) => {
@@ -745,9 +1087,9 @@ impl Workspace {
                 (
                     tab.info.name.clone(),
                     if tab.info.agent.is_some() {
-                        "Stop this agent and remove its DevDesk entry. The CLI's saved conversation is kept."
+                        "Stop this agent and remove its Tervy entry. The CLI's saved conversation is kept."
                     } else {
-                        "Stop this process and remove its definition from DevDesk's global config."
+                        "Stop this process and remove its definition from Tervy's global config."
                     },
                 )
             }
@@ -773,7 +1115,7 @@ impl Workspace {
             });
         }));
     }
-    fn memory_label(&self, info: &SessionInfo, cx: &Context<Self>) -> AnyElement {
+    fn memory_text(&self, info: &SessionInfo) -> String {
         let bytes = self
             .memory
             .get(&info.id)
@@ -785,17 +1127,31 @@ impl Workspace {
                     )
             })
             .and_then(|(_, bytes)| *bytes);
-        let label = bytes.map_or_else(
+        bytes.map_or_else(
             || "—".to_string(),
             |bytes| format!("{:.0} MB", bytes as f64 / 1_000_000.),
-        );
+        )
+    }
+
+    fn sidebar_has_memory_column(&self, cx: &App) -> bool {
+        self.sidebar_state
+            .read(cx)
+            .sizes()
+            .first()
+            .copied()
+            .map(f32::from)
+            .unwrap_or(self.sidebar_width)
+            >= 280.
+    }
+
+    fn memory_label(&self, info: &SessionInfo, cx: &Context<Self>) -> AnyElement {
         div().id(("session-memory", info.id.0)).flex_shrink_0()
-            .text_xs().text_color(cx.theme().muted_foreground).child(label)
-            .tooltip(|window, cx| Tooltip::new("Process memory including children · sampled every 5s · excludes DevDesk scrollback").build(window, cx))
+            .text_xs().text_color(cx.theme().muted_foreground).child(self.memory_text(info))
+            .tooltip(|window, cx| Tooltip::new("Process memory including children · sampled every 5s · excludes Tervy scrollback").build(window, cx))
             .into_any_element()
     }
 
-    fn terminal_rows(&self, project: &str, cx: &Context<Self>) -> AnyElement {
+    fn terminal_rows(&self, project: &str, window: &Window, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let add_project = project.to_string();
         let mut rows = v_flex().gap_1().min_w_0().child(
@@ -810,14 +1166,15 @@ impl Workspace {
                         .text_xs()
                         .font_semibold()
                         .text_color(theme.muted_foreground)
-                        .child("TERMINALS"),
+                        .child("Terminals"),
                 )
                 .child(
                     Button::new(SharedString::from(format!("add-terminal-{project}")))
                         .icon(IconName::Plus)
-                        .xsmall()
+                        .small()
                         .ghost()
                         .tooltip("New terminal")
+                        .accessibility_label("New terminal")
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.active_project = Some(add_project.clone());
                             this.new_terminal(&NewTerminal, window, cx);
@@ -840,10 +1197,16 @@ impl Workspace {
                 continue;
             }
             let id = *id;
-            let name = tab.info.name.clone();
+            let name = format!(
+                "{} · Memory: {}",
+                tab.info.name,
+                self.memory_text(&tab.info)
+            );
             rows = rows.child(
                 h_flex()
                     .id(("terminal-row", id.0))
+                    .relative()
+                    .child(self.sidebar_indicator(SidebarRow::Session(id), window, cx))
                     .ml_4()
                     .px_2()
                     .py_2()
@@ -851,47 +1214,67 @@ impl Workspace {
                     .min_w_0()
                     .rounded_md()
                     .when(self.active() == Some(id), |row| {
-                        row.bg(theme.sidebar_accent)
+                        row.bg(theme.sidebar_accent).font_medium()
                     })
-                    .hover(|style| style.bg(theme.sidebar_accent))
+                    .hover(|style| {
+                        style.bg(if self.active() == Some(id) {
+                            theme.sidebar_accent
+                        } else {
+                            theme.list_hover
+                        })
+                    })
                     .child(
-                        h_flex()
-                            .id(("shell", id.0))
+                        Button::new(("shell", id.0))
+                            .small()
+                            .ghost()
                             .flex_1()
                             .min_w_0()
-                            .gap_2()
-                            .text_sm()
-                            .cursor_pointer()
-                            .tooltip(move |window, cx| Tooltip::new(name.clone()).build(window, cx))
-                            .child(status_indicator(&tab.info, theme))
-                            .child(div().min_w_0().truncate().child(tab.info.name.clone()))
+                            .px_0()
+                            .accessibility_label(tab.info.name.clone())
+                            .tooltip(name)
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .min_w_0()
+                                    .gap_2()
+                                    .child(status_indicator(&tab.info, theme))
+                                    .child(div().min_w_0().truncate().child(tab.info.name.clone())),
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.choose_tab(id, window, cx)
+                                this.click_sidebar_row(SidebarRow::Session(id), window, cx)
                             })),
                     )
-                    .child(self.memory_label(&tab.info, cx))
+                    .when(self.sidebar_has_memory_column(cx), |row| {
+                        row.child(self.memory_label(&tab.info, cx))
+                    })
                     .child(
-                        div()
-                            .id(("close-terminal", id.0))
-                            .px_1()
-                            .py_1()
-                            .rounded_sm()
-                            .flex_shrink_0()
-                            .cursor_pointer()
-                            .text_color(theme.muted_foreground)
-                            .hover(|style| style.bg(theme.border).text_color(theme.foreground))
-                            .tooltip(|window, cx| Tooltip::new("Close terminal").build(window, cx))
-                            .child(Icon::new(IconName::Close).size_3())
+                        session_action(("close-terminal", id.0), "Close terminal")
+                            .icon(IconName::Close)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.close_tab(id, window, cx)
                             })),
                     ),
             );
         }
+        if !self.tabs.values().any(|tab| {
+            tab.info.project == project
+                && tab.info.process.is_none()
+                && tab.info.agent.is_none()
+                && tab.open
+        }) {
+            rows = rows.child(
+                div()
+                    .pl_6()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("No open terminals"),
+            );
+        }
         rows.into_any_element()
     }
 
-    fn agent_rows(&self, project: &str, cx: &Context<Self>) -> AnyElement {
+    fn agent_rows(&self, project: &str, window: &Window, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let launch_project = project.to_string();
         let workspace = cx.weak_entity();
@@ -907,16 +1290,35 @@ impl Workspace {
                         .text_xs()
                         .font_semibold()
                         .text_color(theme.muted_foreground)
-                        .child("AGENTS"),
+                        .child("Agents"),
                 )
                 .child(
                     Button::new(SharedString::from(format!("add-agent-{project}")))
                         .icon(IconName::Plus)
-                        .xsmall()
+                        .small()
                         .ghost()
                         .tooltip("Launch agent")
-                        .dropdown_menu(move |mut menu, _, _| {
-                            for provider in [agent::Provider::Claude, agent::Provider::Codex] {
+                        .accessibility_label("Launch agent")
+                        .dropdown_menu(move |mut menu, _, cx| {
+                            let Some(view) = workspace.upgrade() else {
+                                return menu;
+                            };
+                            let readiness = &view.read(cx).readiness;
+                            let providers = readiness
+                                .as_ref()
+                                .map(crate::setup::Readiness::installed_agents)
+                                .unwrap_or_default();
+                            if providers.is_empty() {
+                                menu = menu.item(
+                                    PopupMenuItem::new(if readiness.is_none() {
+                                        "Checking installed agents…"
+                                    } else {
+                                        "No supported agents found"
+                                    })
+                                    .disabled(true),
+                                );
+                            }
+                            for provider in providers {
                                 let workspace = workspace.clone();
                                 let project = launch_project.clone();
                                 menu = menu.item(
@@ -926,40 +1328,38 @@ impl Workspace {
                                                 if this.shutdown.is_some() {
                                                     return;
                                                 }
-                                                this.active_project = Some(project.clone());
-                                                this.core.send(CoreCommand::NewAgent {
-                                                    project: project.clone(),
-                                                    picker: false,
+                                                this.show_agent_form(
+                                                    project.clone(),
                                                     provider,
-                                                });
-                                                this.update_visibility(window, cx);
-                                                this.save_layout();
-                                                cx.notify();
+                                                    false,
+                                                    None,
+                                                    window,
+                                                    cx,
+                                                );
                                             });
                                         }),
                                 );
                             }
-                            menu
+                            let workspace = workspace.clone();
+                            menu.separator().item(
+                                PopupMenuItem::new("Setup and Recheck Agents…").on_click(
+                                    move |_, window, cx| {
+                                        let _ = workspace.update(cx, |this, cx| {
+                                            this.setup_open = true;
+                                            this.focus.focus(window, cx);
+                                            this.check_setup(cx);
+                                        });
+                                    },
+                                ),
+                            )
                         }),
                 ),
         );
-        let mut agents: Vec<_> = self
-            .tabs
-            .iter()
-            .filter(|(_, tab)| tab.info.agent.is_some())
-            .collect();
-        agents.sort_by_key(|(id, tab)| {
-            (
-                self.side_parent(**id).unwrap_or(**id),
-                is_side(&tab.info),
-                **id,
-            )
-        });
-        for (id, tab) in agents {
+        for id in self.ordered_agent_ids() {
+            let tab = &self.tabs[&id];
             if tab.info.project != project {
                 continue;
             }
-            let id = *id;
             let Some(agent) = &tab.info.agent else {
                 continue;
             };
@@ -972,6 +1372,7 @@ impl Workspace {
             } else {
                 match agent.status {
                     agent::Status::Launching => "Launching",
+                    agent::Status::Running => "Running",
                     agent::Status::Idle => "Idle",
                     agent::Status::Working => "Working",
                     agent::Status::NeedsApproval => "Needs approval",
@@ -982,19 +1383,22 @@ impl Workspace {
                 }
             };
             let full_name = format!(
-                "{} · {} · {status}",
+                "{} · {} · {status} · Memory: {}",
                 tab.info.name,
                 if is_side(&tab.info) {
                     "Read-only"
                 } else {
                     agent.record.provider.label()
-                }
+                },
+                self.memory_text(&tab.info)
             );
             rows = rows.child(
                 // GPUI retains hover state only for identified elements. Keep
                 // it on the entire row so padding and controls repaint too.
                 h_flex()
                     .id(("agent-row", id.0))
+                    .relative()
+                    .child(self.sidebar_indicator(SidebarRow::Session(id), window, cx))
                     .ml_4()
                     .px_2()
                     .py_2()
@@ -1005,74 +1409,79 @@ impl Workspace {
                         self.active() == Some(id) || self.side_focus == Some(id),
                         |row| row.bg(theme.sidebar_accent),
                     )
-                    .hover(|style| style.bg(theme.sidebar_accent))
+                    .hover(|style| {
+                        style.bg(
+                            if self.active() == Some(id) || self.side_focus == Some(id) {
+                                theme.sidebar_accent
+                            } else {
+                                theme.list_hover
+                            },
+                        )
+                    })
                     .gap_1()
                     .child(
-                        h_flex()
-                            .gap_2()
-                            .min_w_0()
-                            .id(("agent", id.0))
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(full_name.clone()).build(window, cx)
-                            })
+                        Button::new(("agent", id.0))
+                            .small()
+                            .ghost()
                             .flex_1()
-                            .text_sm()
-                            .cursor_pointer()
-                            .when(agent.status == agent::Status::NeedsApproval, |div| {
-                                div.text_color(theme.warning)
-                            })
-                            .child(status_indicator(&tab.info, theme))
+                            .min_w_0()
+                            .px_0()
+                            .accessibility_label(full_name.clone())
+                            .tooltip(full_name)
                             .child(
-                                div()
-                                    .flex_1()
+                                h_flex()
+                                    .w_full()
                                     .min_w_0()
-                                    .truncate()
-                                    .text_sm()
-                                    .child(tab.info.name.clone()),
+                                    .gap_2()
+                                    .child(status_indicator(&tab.info, theme))
+                                    .child(div().min_w_0().truncate().child(tab.info.name.clone())),
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.choose_tab(id, window, cx)
+                                this.click_sidebar_row(SidebarRow::Session(id), window, cx)
                             })),
                     )
-                    .child(self.memory_label(&tab.info, cx))
+                    .when(self.sidebar_has_memory_column(cx), |row| {
+                        row.child(self.memory_label(&tab.info, cx))
+                    })
                     .child(
-                        div()
-                            .id(("agent-toggle", id.0))
-                            .text_xs()
-                            .flex_shrink_0()
-                            .px_1()
-                            .py_1()
-                            .rounded_sm()
-                            .text_color(theme.muted_foreground)
-                            .hover(|style| style.bg(theme.border).text_color(theme.foreground))
-                            .cursor_pointer()
-                            .child(if running { "Stop" } else { "Resume" })
+                        session_action(("agent-toggle", id.0), "Stop or resume agent")
+                            .label(if running {
+                                "Stop"
+                            } else if agent.record.provider.tracks_sessions() {
+                                "Resume"
+                            } else {
+                                "Restart"
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.choose_tab(id, window, cx);
-                                this.core.send(if running {
-                                    CoreCommand::Stop(id)
+                                if running {
+                                    this.core.send(CoreCommand::Stop(id));
                                 } else {
-                                    CoreCommand::ResumeAgent(id)
-                                });
+                                    this.show_resume_agent_form(id, window, cx);
+                                }
                             })),
                     )
                     .child(
-                        div()
-                            .id(("remove-agent", id.0))
-                            .tooltip(|window, cx| Tooltip::new("Remove agent").build(window, cx))
-                            .text_xs()
-                            .flex_shrink_0()
-                            .px_1()
-                            .py_1()
-                            .rounded_sm()
-                            .text_color(theme.muted_foreground)
-                            .hover(|style| style.bg(theme.border).text_color(theme.foreground))
-                            .cursor_pointer()
-                            .child(Icon::new(IconName::Close).size_3())
+                        session_action(("remove-agent", id.0), "Remove agent")
+                            .icon(IconName::Close)
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.confirm_remove(RemovalTarget::Session(id), window, cx);
                             })),
                     ),
+            );
+        }
+        if !self
+            .tabs
+            .values()
+            .any(|tab| tab.info.project == project && tab.info.agent.is_some())
+        {
+            rows = rows.child(
+                div()
+                    .pl_6()
+                    .py_2()
+                    .text_xs()
+                    .text_color(theme.muted_foreground)
+                    .child("No agents yet"),
             );
         }
         rows.into_any_element()
@@ -1102,6 +1511,7 @@ impl Workspace {
                 Some(self.sidebar_width)
             },
             active_project: self.active_project.clone(),
+            sidebar_collapsed: self.sidebar_collapsed,
             expanded: self.expanded.iter().cloned().collect(),
             selected: self
                 .selected
@@ -1136,6 +1546,9 @@ impl Workspace {
         }
     }
     fn visible_ids(&self) -> Vec<SessionId> {
+        if self.prompts_open || self.meetings_open {
+            return vec![];
+        }
         let mut ids = self.active().into_iter().collect::<Vec<_>>();
         if let Some(side) = self.active().and_then(|id| self.side_panes.get(&id)) {
             ids.push(*side);
@@ -1287,6 +1700,7 @@ impl Workspace {
         dispatch
     }
     fn update_visibility(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let sidebar_focused = self.sidebar_focus.contains_focused(window, cx);
         let visible = self.visible_ids();
         // Hide first so the previous pane cannot write to the clipboard while
         // the next pane takes focus. Input still goes directly to the PTY.
@@ -1302,10 +1716,19 @@ impl Workspace {
                     .update(cx, |view, cx| view.set_visible(true, window, cx));
             }
         }
-        self.restore_focus(window, cx);
+        if sidebar_focused && !self.setup_open {
+            self.sidebar_focus.focus(window, cx);
+        } else {
+            self.restore_focus(window, cx);
+        }
     }
 
     fn open_project(&mut self, project: String, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompts_open = false;
+        self.meetings_open = false;
+        if self.sidebar_focus.contains_focused(window, cx) {
+            self.focus.focus(window, cx);
+        }
         let started = std::env::var_os("DEVDESK_PERF_SWITCH").map(|_| std::time::Instant::now());
         self.expanded.insert(project.clone());
         self.active_project = Some(project.clone());
@@ -1377,6 +1800,11 @@ impl Workspace {
         self.selected.insert(project, parent);
     }
     fn choose_tab(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompts_open = false;
+        self.meetings_open = false;
+        if self.sidebar_focus.contains_focused(window, cx) {
+            self.focus.focus(window, cx);
+        }
         if self.tabs.get(&id).is_some_and(|tab| is_side(&tab.info)) {
             self.open_side(id);
             self.update_visibility(window, cx);
@@ -1413,7 +1841,10 @@ impl Workspace {
             cx,
         );
     }
-    fn new_terminal(&mut self, _: &NewTerminal, _: &mut Window, _: &mut Context<Self>) {
+    fn new_terminal(&mut self, _: &NewTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        if self.sidebar_focus.contains_focused(window, cx) {
+            self.focus.focus(window, cx);
+        }
         if self.shutdown.is_none()
             && let Some(project) = &self.active_project
         {
@@ -1424,6 +1855,10 @@ impl Workspace {
         }
     }
     fn close_terminal(&mut self, _: &CloseTerminal, window: &mut Window, cx: &mut Context<Self>) {
+        if self.setup_open {
+            self.dismiss_setup(window, cx);
+            return;
+        }
         if self.process_project.is_some() {
             self.cancel_process(window, cx);
             return;
@@ -1493,7 +1928,10 @@ impl Workspace {
         self.save_layout();
         cx.notify();
     }
-    fn add_project(&mut self, _: &AddProject, _: &mut Window, cx: &mut Context<Self>) {
+    fn add_project(&mut self, _: &AddProject, window: &mut Window, cx: &mut Context<Self>) {
+        if self.setup_open {
+            self.dismiss_setup(window, cx);
+        }
         let answer = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -1551,6 +1989,9 @@ impl Workspace {
             Some(agent) if agent.record.role != agent::Role::Primary => {
                 Some("Select the original agent to start another side conversation")
             }
+            Some(agent) if !agent.record.provider.tracks_sessions() => {
+                Some("Read-only side questions are available for Claude and Codex agents")
+            }
             Some(_) if tab.info.status != SessionStatus::Running => {
                 Some("Resume or start the selected agent before asking a side question")
             }
@@ -1600,7 +2041,7 @@ impl Workspace {
         if let Some(provider) = self.customization_provider {
             let request = self.rename_input.read(cx).value().to_string();
             if request.trim().is_empty() {
-                self.error = Some("Describe how you want to customize DevDesk".into());
+                self.error = Some("Describe how you want to customize Tervy".into());
                 cx.notify();
                 return;
             }
@@ -1629,6 +2070,24 @@ impl Workspace {
         cx.notify();
     }
     fn restore_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agent_launch.is_some() {
+            self.agent_args_input
+                .update(cx, |input, cx| input.focus(window, cx));
+            return;
+        }
+        if self.setup_open {
+            self.focus.focus(window, cx);
+            return;
+        }
+        if self.sidebar_focus.contains_focused(window, cx) {
+            self.sidebar_focus.focus(window, cx);
+            return;
+        }
+        if self.prompts_open {
+            self.prompt_search_input
+                .update(cx, |input, cx| input.focus(window, cx));
+            return;
+        }
         let focus = self
             .side_focus
             .filter(|id| self.visible_ids().contains(id))
@@ -1639,6 +2098,11 @@ impl Workspace {
         focus.focus(window, cx);
     }
     fn show_palette(&mut self, _: &Palette, window: &mut Window, cx: &mut Context<Self>) {
+        self.agent_launch = None;
+        self.agent_launch_error = None;
+        if self.setup_open {
+            self.dismiss_setup(window, cx);
+        }
         self.palette_open = true;
         self.palette_query.clear();
         self.palette.update(cx, |state, cx| {
@@ -1648,15 +2112,12 @@ impl Workspace {
         cx.notify();
     }
     fn palette_actions(&self, cx: &App) -> Vec<(String, PaletteAction)> {
+        let installed_agents = self
+            .readiness
+            .as_ref()
+            .map(crate::setup::Readiness::installed_agents)
+            .unwrap_or_default();
         let mut actions = vec![
-            (
-                "Customize DevDesk with Claude…".into(),
-                PaletteAction::Customize(agent::Provider::Claude),
-            ),
-            (
-                "Customize DevDesk with Codex…".into(),
-                PaletteAction::Customize(agent::Provider::Codex),
-            ),
             (
                 "Review Customization…".into(),
                 PaletteAction::ReviewCustomization,
@@ -1667,12 +2128,30 @@ impl Workspace {
             ),
             ("Widen Sidebar".into(), PaletteAction::ResizeSidebar(40)),
             ("Narrow Sidebar".into(), PaletteAction::ResizeSidebar(-40)),
+            (
+                if self.sidebar_collapsed {
+                    "Show Sidebar"
+                } else {
+                    "Hide Sidebar"
+                }
+                .into(),
+                PaletteAction::ToggleSidebar,
+            ),
             ("New Terminal".into(), PaletteAction::New),
             ("Close Terminal".into(), PaletteAction::Close),
             ("Rename Terminal".into(), PaletteAction::Rename),
             ("Add Project…".into(), PaletteAction::Add),
             ("Ask Agent Question…".into(), PaletteAction::Ask),
         ];
+        for provider in installed_agents
+            .iter()
+            .filter(|provider| provider.tracks_sessions())
+        {
+            actions.push((
+                format!("Customize Tervy with {}…", provider.label()),
+                PaletteAction::Customize(*provider),
+            ));
+        }
         actions.extend(self.projects.iter().map(|project| {
             (
                 format!("Switch Project: {}", project.name),
@@ -1693,37 +2172,44 @@ impl Workspace {
                 .iter()
                 .find(|item| item.id == *project)
                 .and_then(|item| item.agents.default_provider.as_deref());
-            actions.push((
-                "Launch Default Agent".into(),
-                PaletteAction::LaunchAgent(
-                    if provider == Some("codex") {
-                        agent::Provider::Codex
-                    } else {
-                        agent::Provider::Claude
-                    },
-                    false,
-                ),
-            ));
-            actions.push((
-                "Launch Claude".into(),
-                PaletteAction::LaunchAgent(agent::Provider::Claude, false),
-            ));
-            actions.push((
-                "Resume other Claude session…".into(),
-                PaletteAction::LaunchAgent(agent::Provider::Claude, true),
-            ));
-            actions.push((
-                "Launch Codex".into(),
-                PaletteAction::LaunchAgent(agent::Provider::Codex, false),
-            ));
-            actions.push((
-                "Resume other Codex session…".into(),
-                PaletteAction::LaunchAgent(agent::Provider::Codex, true),
-            ));
+            let default_provider = provider
+                .and_then(agent::Provider::from_command)
+                .unwrap_or_default();
+            if installed_agents.contains(&default_provider) {
+                actions.push((
+                    "Launch Default Agent".into(),
+                    PaletteAction::LaunchAgent(default_provider, false),
+                ));
+            }
+            for provider in &installed_agents {
+                actions.push((
+                    format!("Launch {}", provider.label()),
+                    PaletteAction::LaunchAgent(*provider, false),
+                ));
+                if provider.tracks_sessions() {
+                    actions.push((
+                        format!("Resume other {} session…", provider.label()),
+                        PaletteAction::LaunchAgent(*provider, true),
+                    ));
+                }
+            }
             for (id, tab) in &self.tabs {
                 if tab.info.project == *project && tab.info.agent.is_some() {
                     actions.push((
-                        format!("Resume {}", tab.info.name),
+                        format!(
+                            "{} {}",
+                            if tab
+                                .info
+                                .agent
+                                .as_ref()
+                                .is_some_and(|agent| agent.record.provider.tracks_sessions())
+                            {
+                                "Resume"
+                            } else {
+                                "Restart"
+                            },
+                            tab.info.name
+                        ),
                         PaletteAction::ResumeAgent(*id),
                     ));
                     actions.push((format!("Stop {}", tab.info.name), PaletteAction::Stop(*id)));
@@ -1800,8 +2286,9 @@ impl Workspace {
             let label: String = uri.chars().take(120).collect();
             actions.push((format!("Open Link: {label}"), PaletteAction::OpenUrl(uri)));
         }
+        actions.push(("Setup and Prerequisites".into(), PaletteAction::Setup));
         actions.push(("Reload Configuration".into(), PaletteAction::Reload));
-        actions.push(("Quit DevDesk".into(), PaletteAction::Quit));
+        actions.push(("Quit Tervy".into(), PaletteAction::Quit));
         for project in &self.projects {
             actions.push((
                 format!("Toggle Project Details: {}", project.name),
@@ -1836,6 +2323,11 @@ impl Workspace {
             PaletteAction::Close => self.close_terminal(&CloseTerminal, window, cx),
             PaletteAction::Rename => self.rename_terminal(&RenameTerminal, window, cx),
             PaletteAction::Add => self.add_project(&AddProject, window, cx),
+            PaletteAction::Setup => {
+                self.setup_open = true;
+                self.focus.focus(window, cx);
+                self.check_setup(cx);
+            }
             PaletteAction::ResizeSidebar(delta) => {
                 let state = self.sidebar_state.clone();
                 state.update(cx, |state, cx| {
@@ -1848,6 +2340,7 @@ impl Workspace {
                     self.save_layout();
                 }
             }
+            PaletteAction::ToggleSidebar => self.toggle_sidebar(&ToggleSidebar, window, cx),
             PaletteAction::ResizeSide(delta) => {
                 if let Some(parent) = self.active()
                     && let Some(state) = self.split_states.get(&parent).cloned()
@@ -1886,22 +2379,20 @@ impl Workspace {
             PaletteAction::StopAll(project) => self.core.send(CoreCommand::StopAll(project)),
             PaletteAction::Recover => self.core.send(CoreCommand::ShowOrphans),
             PaletteAction::LaunchAgent(provider, picker) => {
-                if let Some(project) = &self.active_project {
-                    self.core.send(CoreCommand::NewAgent {
-                        project: project.clone(),
-                        picker,
-                        provider,
-                    });
+                if let Some(project) = self.active_project.clone() {
+                    self.show_agent_form(project, provider, picker, None, window, cx);
                 }
             }
             PaletteAction::ResumeAgent(id) => {
                 self.choose_tab(id, window, cx);
-                self.core.send(CoreCommand::ResumeAgent(id));
+                self.show_resume_agent_form(id, window, cx);
             }
         }
-        if self.rename.is_none()
+        if !self.setup_open
+            && self.rename.is_none()
             && self.question_parent.is_none()
             && self.customization_provider.is_none()
+            && self.agent_launch.is_none()
         {
             self.restore_focus(window, cx);
         }
@@ -1925,6 +2416,10 @@ impl Workspace {
                 )
             })
             .map(|tab| tab.info.name.clone())
+            .chain(
+                self.active_recording()
+                    .map(|_| "Meeting recording".to_string()),
+            )
             .collect();
         if running.is_empty() {
             self.shutdown = Some(0);
@@ -1952,6 +2447,39 @@ impl Workspace {
             });
         }));
     }
+}
+
+/// Focus the editor when any part of its field is clicked, including frame padding.
+fn modal_input(input: &Entity<InputState>, label: &'static str) -> Div {
+    let editor = input.clone();
+    div()
+        .w_full()
+        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+            editor.update(cx, |input, cx| input.focus(window, cx));
+        })
+        .child(Input::new(input).aria_label(label))
+}
+
+/// Shared, restrained dialog surface; the overlay supplies viewport padding.
+fn dialog_panel(width: f32, theme: &Theme) -> Div {
+    v_flex()
+        .w(px(width))
+        .max_w_full()
+        .min_h_0()
+        .p_6()
+        .gap_4()
+        .rounded_lg()
+        .border_1()
+        .border_color(theme.border)
+        .bg(theme.background)
+}
+
+fn session_action(id: impl Into<ElementId>, label: &'static str) -> Button {
+    Button::new(id)
+        .small()
+        .ghost()
+        .tooltip(label)
+        .accessibility_label(label)
 }
 
 fn fuzzy_match(label: &str, query: &str) -> bool {
@@ -1987,7 +2515,7 @@ fn status_indicator(info: &SessionInfo, theme: &Theme) -> impl IntoElement {
             Some(agent::Status::Working | agent::Status::ActiveInferred) => theme.info,
             Some(agent::Status::Launching) => theme.warning,
             Some(agent::Status::Exited) => theme.muted_foreground,
-            Some(agent::Status::Idle) | None => theme.success,
+            Some(agent::Status::Idle | agent::Status::Running) | None => theme.success,
         },
     };
     div()
@@ -1998,7 +2526,7 @@ fn status_indicator(info: &SessionInfo, theme: &Theme) -> impl IntoElement {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Split state belongs to this view, rather than render-local keyed
         // state: keyboard actions must resize it after rendering completes.
         if let Some(parent) = self.active()
@@ -2017,8 +2545,35 @@ impl Render for Workspace {
         if self.perf_layout == "minimal" {
             return div().size_full().bg(bg).into_any_element();
         }
+        self.sync_sidebar_cursor();
         let mut sidebar = v_flex()
             .id("projects-sidebar")
+            .track_focus(&self.sidebar_focus)
+            .key_context("Sidebar")
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.focus_sidebar(&FocusSidebar, window, cx);
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &SidebarUp, window, cx| this.move_sidebar(-1, window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &SidebarDown, window, cx| this.move_sidebar(1, window, cx)),
+            )
+            .on_action(cx.listener(|this, _: &SidebarActivate, window, cx| {
+                this.activate_sidebar(window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SidebarCollapse, window, cx| {
+                this.expand_sidebar(false, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SidebarExpand, window, cx| {
+                this.expand_sidebar(true, window, cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &SidebarExit, window, cx| this.exit_sidebar(window, cx)),
+            )
             .size_full()
             .min_w_0()
             .bg(theme.sidebar)
@@ -2028,16 +2583,27 @@ impl Render for Workspace {
                     .px_4()
                     .py_4()
                     .gap_1()
-                    .child(div().text_sm().font_bold().child("DevDesk"))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .child(
+                                gpui_kit::component::Icon::default()
+                                    .data(include_bytes!("../../../assets/brand/mark-ui.svg"))
+                                    .size(px(28.))
+                                    .text_color(theme.ring),
+                            )
+                            .child(div().text_base().font_semibold().child("Tervy")),
+                    )
                     .child(
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child("Developer workspace"),
+                            .child("Your development workspace"),
                     ),
             );
         let mut project_list = v_flex()
             .id("sidebar-scroll")
+            .track_scroll(&self.sidebar_scroll)
             .flex_1()
             .min_h_0()
             .overflow_y_scroll()
@@ -2045,15 +2611,261 @@ impl Render for Workspace {
             .pb_3()
             .gap_1()
             .child(
-                div()
+                h_flex()
                     .px_2()
                     .pt_2()
                     .pb_2()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(muted)
-                    .child("PROJECTS"),
+                    .justify_between()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(muted)
+                            .child("Library"),
+                    )
+                    .child(
+                        session_action("new-prompt-sidebar", "New prompt")
+                            .icon(IconName::Plus)
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.new_prompt(window, cx)),
+                            ),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .id("prompts-library-row")
+                    .relative()
+                    .min_w_0()
+                    .flex_shrink_0()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .gap_1()
+                    .child(self.sidebar_indicator(SidebarRow::Prompts, window, cx))
+                    .when(self.prompts_open, |row| row.bg(active_bg))
+                    .hover(|style| {
+                        style.bg(if self.prompts_open {
+                            active_bg
+                        } else {
+                            theme.list_hover
+                        })
+                    })
+                    .child(
+                        session_action("expand-prompts", "Expand or collapse prompts")
+                            .icon(if self.prompts_expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.prompts_expanded = !this.prompts_expanded;
+                                if this.prompts_expanded {
+                                    this.refresh_prompts(cx);
+                                } else if matches!(
+                                    this.sidebar_cursor.as_ref(),
+                                    Some(SidebarRow::Prompt(_))
+                                ) {
+                                    this.sidebar_cursor = Some(SidebarRow::Prompts);
+                                }
+                                this.sync_sidebar_cursor();
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("prompts-library")
+                            .small()
+                            .ghost()
+                            .flex_1()
+                            .min_w_0()
+                            .px_0()
+                            .child(div().w_full().text_left().font_semibold().child("Prompts"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.click_sidebar_row(SidebarRow::Prompts, window, cx)
+                            })),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(self.prompts.len().to_string()),
+                    ),
             );
+        if self.prompts_expanded {
+            for prompt in &self.prompts {
+                let id = prompt.id.clone();
+                let selected = self.prompts_open && self.prompt_selected.as_ref() == Some(&id);
+                project_list = project_list.child(
+                    h_flex()
+                        .relative()
+                        .min_w_0()
+                        .pl_6()
+                        .pr_2()
+                        .py_1()
+                        .rounded_md()
+                        .child(self.sidebar_indicator(SidebarRow::Prompt(id.clone()), window, cx))
+                        .when(selected, |row| row.bg(active_bg))
+                        .child(
+                            Button::new(SharedString::from(format!("prompt-{id}")))
+                                .small()
+                                .ghost()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .label(prompt.title.clone())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.click_sidebar_row(
+                                        SidebarRow::Prompt(id.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                })),
+                        ),
+                );
+            }
+            if self.prompts.is_empty() && !self.prompt_searching {
+                let has_query = !self.prompt_search_input.read(cx).value().trim().is_empty();
+                project_list =
+                    project_list.child(div().px_4().py_2().text_xs().text_color(muted).child(
+                        if has_query {
+                            "No matches"
+                        } else {
+                            "No saved prompts"
+                        },
+                    ));
+            }
+            if self.prompt_next_offset.is_some() {
+                project_list = project_list.child(
+                    Button::new("more-prompts")
+                        .small()
+                        .ghost()
+                        .label("Load more prompts")
+                        .on_click(cx.listener(|this, _, _, cx| this.load_more_prompts(cx))),
+                );
+            }
+        }
+        project_list = project_list.child(
+            h_flex()
+                .id("meetings-library-row")
+                .relative()
+                .min_w_0()
+                .flex_shrink_0()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .gap_1()
+                .child(self.sidebar_indicator(SidebarRow::Meetings, window, cx))
+                .when(self.meetings_open, |row| row.bg(active_bg))
+                .hover(|style| {
+                    style.bg(if self.meetings_open {
+                        active_bg
+                    } else {
+                        theme.list_hover
+                    })
+                })
+                .child(
+                    session_action("expand-meetings", "Expand or collapse meetings")
+                        .icon(if self.meetings_expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.meetings_expanded = !this.meetings_expanded;
+                            if this.meetings_expanded {
+                                this.core.send(CoreCommand::ListMeetings);
+                            } else if matches!(
+                                this.sidebar_cursor.as_ref(),
+                                Some(SidebarRow::Meeting(_))
+                            ) {
+                                this.sidebar_cursor = Some(SidebarRow::Meetings);
+                            }
+                            this.sync_sidebar_cursor();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    Button::new("meetings-library")
+                        .small()
+                        .ghost()
+                        .flex_1()
+                        .min_w_0()
+                        .px_0()
+                        .child(div().w_full().text_left().font_semibold().child("Meetings"))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.click_sidebar_row(SidebarRow::Meetings, window, cx)
+                        })),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child(self.meetings.len().to_string()),
+                ),
+        );
+        if self.meetings_expanded {
+            for meeting in &self.meetings {
+                let id = meeting.id.clone();
+                let selected = self.meetings_open && self.meeting_selected.as_ref() == Some(&id);
+                project_list = project_list.child(
+                    h_flex()
+                        .relative()
+                        .min_w_0()
+                        .pl_6()
+                        .pr_2()
+                        .py_1()
+                        .rounded_md()
+                        .child(self.sidebar_indicator(SidebarRow::Meeting(id.clone()), window, cx))
+                        .when(selected, |row| row.bg(active_bg))
+                        .child(
+                            Button::new(SharedString::from(format!("sidebar-meeting-{id}")))
+                                .small()
+                                .ghost()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .label(meeting.title.clone())
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.click_sidebar_row(
+                                        SidebarRow::Meeting(id.clone()),
+                                        window,
+                                        cx,
+                                    )
+                                })),
+                        ),
+                );
+            }
+            if self.meetings.is_empty() {
+                project_list = project_list.child(
+                    div()
+                        .pl_6()
+                        .py_2()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("No meetings yet"),
+                );
+            }
+        }
+        project_list = project_list.child(
+            h_flex()
+                .px_2()
+                .pt_2()
+                .pb_2()
+                .justify_between()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(muted)
+                        .child("Projects"),
+                )
+                .child(
+                    session_action("add-project", "Add project · ⌘O")
+                        .icon(IconName::Plus)
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.add_project(&AddProject, window, cx)
+                        })),
+                ),
+        );
         for project in &self.projects {
             let id = project.id.clone();
             let toggle_id = id.clone();
@@ -2064,7 +2876,15 @@ impl Render for Workspace {
             project_list = project_list.child(
                 h_flex()
                     .id(SharedString::from(format!("project-row-{id}")))
-                    .hover(|style| style.bg(active_bg))
+                    .relative()
+                    .child(self.sidebar_indicator(SidebarRow::Project(id.clone()), window, cx))
+                    .hover(|style| {
+                        style.bg(if selected {
+                            active_bg
+                        } else {
+                            theme.list_hover
+                        })
+                    })
                     .min_w_0()
                     .flex_shrink_0()
                     .px_2()
@@ -2073,69 +2893,59 @@ impl Render for Workspace {
                     .when(selected, |row| row.bg(active_bg))
                     .gap_1()
                     .child(
-                        div()
-                            .id(SharedString::from(format!("expand-{id}")))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .flex_shrink_0()
-                            .cursor_pointer()
-                            .w(px(18.))
-                            .h(px(24.))
-                            .text_color(muted)
-                            .child(
-                                Icon::new(if expanded {
-                                    IconName::ChevronDown
-                                } else {
-                                    IconName::ChevronRight
-                                })
-                                .size_3(),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if !this.expanded.remove(&toggle_id) {
-                                    this.expanded.insert(toggle_id.clone());
-                                }
-                                this.save_layout();
-                                cx.notify();
-                            })),
+                        session_action(
+                            SharedString::from(format!("expand-{id}")),
+                            "Expand or collapse project",
+                        )
+                        .icon(if expanded {
+                            IconName::ChevronDown
+                        } else {
+                            IconName::ChevronRight
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            if !this.expanded.remove(&toggle_id) {
+                                this.expanded.insert(toggle_id.clone());
+                            }
+                            this.save_layout();
+                            cx.notify();
+                        })),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(format!("project-{id}")))
-                            .tooltip(move |window, cx| {
-                                Tooltip::new(full_name.clone()).build(window, cx)
-                            })
+                        Button::new(SharedString::from(format!("project-{id}")))
+                            .small()
+                            .ghost()
                             .flex_1()
-                            .cursor_pointer()
                             .min_w_0()
-                            .truncate()
-                            .text_sm()
-                            .font_semibold()
-                            .py_1()
-                            .child(project.name.clone())
+                            .px_0()
+                            .tooltip(full_name)
+                            .accessibility_label(project.name.clone())
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_left()
+                                    .truncate()
+                                    .font_semibold()
+                                    .child(project.name.clone()),
+                            )
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.open_project(id.clone(), window, cx)
+                                this.click_sidebar_row(SidebarRow::Project(id.clone()), window, cx)
                             })),
                     )
                     .child(
-                        div()
-                            .id(SharedString::from(format!("remove-project-{remove_id}")))
-                            .tooltip(|window, cx| Tooltip::new("Remove project").build(window, cx))
-                            .cursor_pointer()
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .text_color(muted)
-                            .hover(|style| style.bg(active_bg).text_color(theme.danger))
-                            .text_xs()
-                            .child(Icon::new(IconName::Close).size_3())
-                            .on_click(cx.listener(move |this, _, window, cx| {
+                        session_action(
+                            SharedString::from(format!("remove-project-{remove_id}")),
+                            "Remove project",
+                        )
+                        .icon(IconName::Close)
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
                                 this.confirm_remove(
                                     RemovalTarget::Project(remove_id.clone()),
                                     window,
                                     cx,
                                 );
-                            })),
+                            },
+                        )),
                     ),
             );
             if expanded {
@@ -2152,14 +2962,15 @@ impl Render for Workspace {
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(muted)
-                                .child("PROCESSES"),
+                                .child("Processes"),
                         )
                         .child(
                             Button::new(SharedString::from(format!("add-process-{}", project.id)))
                                 .icon(IconName::Plus)
-                                .xsmall()
+                                .small()
                                 .ghost()
                                 .tooltip("Add process")
+                                .accessibility_label("Add process")
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.show_process_form(add_process_project.clone(), window, cx);
                                 })),
@@ -2189,7 +3000,11 @@ impl Render for Workspace {
                             SessionStatus::Stopping => "Stopping".into(),
                             SessionStatus::Exited { .. } => "Exited".into(),
                         };
-                        let full_name = tab.info.name.clone();
+                        let full_name = format!(
+                            "{} · Memory: {}",
+                            tab.info.name,
+                            self.memory_text(&tab.info)
+                        );
                         let detail = if tab.info.config_changed {
                             format!("{status} · config changed — restart to apply")
                         } else {
@@ -2198,6 +3013,8 @@ impl Render for Workspace {
                         project_list = project_list.child(
                             v_flex()
                                 .id(("process-row", id.0))
+                                .relative()
+                                .child(self.sidebar_indicator(SidebarRow::Session(id), window, cx))
                                 .flex_shrink_0()
                                 .ml_4()
                                 .px_2()
@@ -2205,138 +3022,232 @@ impl Render for Workspace {
                                 .rounded_md()
                                 .min_w_0()
                                 .when(self.active() == Some(id), |row| row.bg(active_bg))
-                                .hover(|style| style.bg(active_bg))
+                                .hover(|style| {
+                                    style.bg(if self.active() == Some(id) {
+                                        active_bg
+                                    } else {
+                                        theme.list_hover
+                                    })
+                                })
                                 .gap_1()
                                 .child(
                                     h_flex()
                                         .gap_2()
                                         .child(
-                                            h_flex()
-                                                .id(("process", id.0))
-                                                .tooltip(move |window, cx| {
-                                                    Tooltip::new(format!("{full_name} · {detail}"))
-                                                        .build(window, cx)
-                                                })
+                                            Button::new(("process", id.0))
+                                                .small()
+                                                .ghost()
                                                 .flex_1()
                                                 .min_w_0()
-                                                .gap_2()
-                                                .cursor_pointer()
-                                                .text_sm()
-                                                .when(failed, |div| div.text_color(theme.danger))
-                                                .child(status_indicator(&tab.info, theme))
+                                                .px_0()
+                                                .accessibility_label(format!(
+                                                    "{full_name} · {detail}"
+                                                ))
+                                                .tooltip(format!("{full_name} · {detail}"))
                                                 .child(
-                                                    div()
+                                                    h_flex()
+                                                        .w_full()
                                                         .min_w_0()
-                                                        .truncate()
-                                                        .child(tab.info.name.clone()),
+                                                        .gap_2()
+                                                        .child(status_indicator(&tab.info, theme))
+                                                        .child(
+                                                            div()
+                                                                .min_w_0()
+                                                                .truncate()
+                                                                .when(failed, |label| {
+                                                                    label.text_color(theme.danger)
+                                                                })
+                                                                .child(tab.info.name.clone()),
+                                                        ),
                                                 )
                                                 .on_click(cx.listener(
                                                     move |this, _, window, cx| {
-                                                        this.choose_tab(id, window, cx)
+                                                        this.click_sidebar_row(
+                                                            SidebarRow::Session(id),
+                                                            window,
+                                                            cx,
+                                                        )
                                                     },
                                                 )),
                                         )
-                                        .child(self.memory_label(&tab.info, cx))
+                                        .when(self.sidebar_has_memory_column(cx), |row| {
+                                            row.child(self.memory_label(&tab.info, cx))
+                                        })
                                         .child(
-                                            div()
-                                                .id(("process-toggle", id.0))
-                                                .cursor_pointer()
-                                                .flex_shrink_0()
-                                                .px_1()
-                                                .py_1()
-                                                .rounded_sm()
-                                                .text_color(muted)
-                                                .hover(|style| {
-                                                    style.bg(theme.border).text_color(fg)
-                                                })
-                                                .text_xs()
-                                                .child(if running { "Stop" } else { "Start" })
-                                                .on_click(cx.listener(move |this, _, _, _| {
+                                            session_action(
+                                                ("process-toggle", id.0),
+                                                "Start or stop process",
+                                            )
+                                            .label(if running { "Stop" } else { "Start" })
+                                            .on_click(
+                                                cx.listener(move |this, _, _, _| {
                                                     this.core.send(if running {
                                                         CoreCommand::Stop(id)
                                                     } else {
                                                         CoreCommand::Start(id)
                                                     })
-                                                })),
+                                                }),
+                                            ),
                                         )
                                         .child(
-                                            div()
-                                                .id(("process-restart", id.0))
-                                                .tooltip(|window, cx| {
-                                                    Tooltip::new("Restart process")
-                                                        .build(window, cx)
-                                                })
-                                                .cursor_pointer()
-                                                .flex_shrink_0()
-                                                .px_1()
-                                                .py_1()
-                                                .rounded_sm()
-                                                .text_color(muted)
-                                                .hover(|style| {
-                                                    style.bg(theme.border).text_color(fg)
-                                                })
-                                                .text_xs()
-                                                .child(Icon::new(IconName::RotateCw).size_3())
-                                                .on_click(cx.listener(move |this, _, _, _| {
+                                            session_action(
+                                                ("process-restart", id.0),
+                                                "Restart process",
+                                            )
+                                            .icon(IconName::RotateCw)
+                                            .on_click(
+                                                cx.listener(move |this, _, _, _| {
                                                     this.core.send(CoreCommand::Restart(id))
-                                                })),
+                                                }),
+                                            ),
                                         )
                                         .child(
-                                            div()
-                                                .id(("remove-process", id.0))
-                                                .tooltip(|window, cx| {
-                                                    Tooltip::new("Remove process").build(window, cx)
-                                                })
-                                                .cursor_pointer()
-                                                .flex_shrink_0()
-                                                .px_1()
-                                                .py_1()
-                                                .rounded_sm()
-                                                .text_color(muted)
-                                                .hover(|style| {
-                                                    style.bg(theme.border).text_color(fg)
-                                                })
-                                                .text_xs()
-                                                .child(Icon::new(IconName::Close).size_3())
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.confirm_remove(
-                                                            RemovalTarget::Session(id),
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    },
-                                                )),
+                                            session_action(
+                                                ("remove-process", id.0),
+                                                "Remove process",
+                                            )
+                                            .icon(IconName::Close)
+                                            .on_click(
+                                                cx.listener(move |this, _, window, cx| {
+                                                    this.confirm_remove(
+                                                        RemovalTarget::Session(id),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
                                         ),
                                 ),
                         );
                         continue;
                     }
                 }
-                project_list = project_list.child(self.terminal_rows(&project.id, cx));
-                project_list = project_list.child(self.agent_rows(&project.id, cx));
+                project_list = project_list.child(self.terminal_rows(&project.id, window, cx));
+                project_list = project_list.child(self.agent_rows(&project.id, window, cx));
             }
         }
-        sidebar =
-            sidebar.child(project_list).child(
-                div().px_3().py_2().border_t_1().border_color(border).child(
-                    div()
-                        .id("add-project")
-                        .cursor_pointer()
-                        .px_2()
-                        .py_2()
-                        .rounded_md()
-                        .hover(|style| style.bg(active_bg))
-                        .text_sm()
-                        .child("+ Add Project…")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.add_project(&AddProject, window, cx)
-                        })),
-                ),
-            );
+        sidebar = sidebar.child(project_list);
+        self.sidebar_scroll_pending = false;
         let visible = self.visible_ids();
-        let mut content = v_flex().flex_1().min_w_0().h_full();
-        if let Some(side) = self
+        let project_name = self
+            .projects
+            .iter()
+            .find(|project| Some(&project.id) == self.active_project.as_ref())
+            .map(|project| project.name.clone())
+            .unwrap_or_else(|| "Workspace".into());
+        let project_name = if self.prompts_open || self.meetings_open {
+            "Library".to_string()
+        } else {
+            project_name
+        };
+        let mut content = v_flex().flex_1().min_w_0().h_full().child(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap_3()
+                .border_b_1()
+                .border_color(border)
+                .child(
+                    Button::new("toggle-workspace-sidebar")
+                        .small()
+                        .ghost()
+                        .icon(if self.sidebar_collapsed {
+                            IconName::PanelLeftOpen
+                        } else {
+                            IconName::PanelLeftClose
+                        })
+                        .tooltip(if self.sidebar_collapsed {
+                            "Show sidebar · ⌘B"
+                        } else {
+                            "Hide sidebar · ⌘B"
+                        })
+                        .accessibility_label(if self.sidebar_collapsed {
+                            "Show sidebar"
+                        } else {
+                            "Hide sidebar"
+                        })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_sidebar(&ToggleSidebar, window, cx)
+                        })),
+                )
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .gap_1()
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(muted)
+                                .truncate()
+                                .child(project_name),
+                        )
+                        .child(
+                            div().text_sm().font_semibold().truncate().child(
+                                self.active()
+                                    .and_then(|id| self.tabs.get(&id))
+                                    .map(|tab| tab.info.name.clone())
+                                    .unwrap_or_else(|| {
+                                        if self.prompts_open {
+                                            "Prompts"
+                                        } else if self.meetings_open {
+                                            "Meetings"
+                                        } else {
+                                            "Overview"
+                                        }
+                                        .into()
+                                    }),
+                            ),
+                        ),
+                )
+                .child(if let Some(meeting) = self.active_recording() {
+                    let elapsed = (std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64
+                        - meeting.started_at)
+                        .max(0) as u64;
+                    let label = match meeting.status {
+                        meetings::Status::Starting => "Starting…".to_string(),
+                        meetings::Status::Stopping => "Saving…".to_string(),
+                        _ => format!("Stop · {:02}:{:02}", elapsed / 60, elapsed % 60),
+                    };
+                    Button::new("stop-meeting-toolbar")
+                        .small()
+                        .primary()
+                        .label(label)
+                        .disabled(meeting.status != meetings::Status::Recording)
+                        .on_click(cx.listener(|this, _, _, cx| this.stop_meeting(cx)))
+                } else {
+                    Button::new("record-meeting-toolbar")
+                        .small()
+                        .primary()
+                        .label("Record")
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.record_meeting(window, cx)),
+                        )
+                })
+                .when(
+                    self.active_project.is_some() && !self.prompts_open && !self.meetings_open,
+                    |header| {
+                        header.child(
+                            Button::new("toolbar-new-terminal")
+                                .small()
+                                .icon(IconName::Plus)
+                                .label("Terminal")
+                                .tooltip("New terminal · ⌘T")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.new_terminal(&NewTerminal, window, cx)
+                                })),
+                        )
+                    },
+                ),
+        );
+        if self.prompts_open {
+            content = content.child(self.prompts_content(cx));
+        } else if self.meetings_open {
+            content = content.child(self.meetings_content(cx));
+        } else if let Some(side) = self
             .active()
             .and_then(|id| self.side_panes.get(&id))
             .copied()
@@ -2360,12 +3271,12 @@ impl Render for Workspace {
                         .gap_2()
                         .text_xs()
                         .text_color(muted)
-                        .child(div().flex_1().child(chrome))
+                        .border_b_1()
+                        .border_color(border)
+                        .child(div().flex_1().min_w_0().truncate().child(chrome))
                         .child(
-                            div()
-                                .id("close-side")
-                                .cursor_pointer()
-                                .child(Icon::new(IconName::Close).size_3())
+                            session_action("close-side", "Close side conversation")
+                                .icon(IconName::Close)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.close_tab(side, window, cx)
                                 })),
@@ -2377,14 +3288,50 @@ impl Render for Workspace {
                         .min_h_0()
                         .child(self.tabs[&side].view.clone()),
                 );
-            content = content.child(
-                div().flex_1().min_h_0().child(
-                    h_resizable(("agent-split", parent.0))
-                        .with_state(&split_state)
-                        .child(resizable_panel().child(self.tabs[&parent].view.clone()))
-                        .child(resizable_panel().child(side_pane)),
-                ),
-            );
+            let sidebar_size = if self.sidebar_collapsed {
+                0.
+            } else {
+                self.sidebar_state
+                    .read(cx)
+                    .sizes()
+                    .first()
+                    .copied()
+                    .map(f32::from)
+                    .unwrap_or(self.sidebar_width)
+            };
+            if f32::from(window.viewport_size().width) - sidebar_size < 600. {
+                // Stack conversations when side-by-side terminals would be too
+                // narrow; keep the desktop split state for the next wide render.
+                content = content.child(
+                    v_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .min_w_0()
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .child(self.tabs[&parent].view.clone()),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .border_t_1()
+                                .border_color(border)
+                                .child(side_pane),
+                        ),
+                );
+            } else {
+                content = content.child(
+                    div().flex_1().min_h_0().child(
+                        h_resizable(("agent-split", parent.0))
+                            .with_state(&split_state)
+                            .child(resizable_panel().child(self.tabs[&parent].view.clone()))
+                            .child(resizable_panel().child(side_pane)),
+                    ),
+                );
+            }
         } else if !visible.is_empty() {
             let mut panes = h_flex().flex_1().min_h_0().min_w_0();
             for id in visible {
@@ -2399,18 +3346,23 @@ impl Render for Workspace {
                     .flex_1()
                     .items_center()
                     .justify_center()
-                    .gap_2()
-                    .child(if self.active_project.is_some() {
-                        "No terminal open · Cmd-T to open one"
-                    } else {
-                        "No project open"
-                    })
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(muted)
-                            .child("Cmd-P for commands · Add Project to choose a folder"),
-                    ),
+                    .p_6()
+                    .gap_4()
+                    .child(div().text_lg().font_semibold().child(if self.active_project.is_some() {
+                        "Open a terminal to get started"
+                    } else { "Your development workspace, together." }))
+                    .child(div().max_w(px(360.)).text_sm().text_color(muted).text_center()
+                        .child(if self.active_project.is_some() {
+                            "Run a shell, start a configured process, or launch an agent from the sidebar."
+                        } else { "Bring your terminals, project processes, and coding agents into one focused desktop workspace." }))
+                    .child(Button::new("empty-primary-action").primary()
+                        .label(if self.active_project.is_some() { "New terminal" } else { "Add project" })
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            if this.active_project.is_some() { this.new_terminal(&NewTerminal, window, cx); }
+                            else { this.add_project(&AddProject, window, cx); }
+                        })))
+                    .when(self.projects.is_empty(), |empty| empty.child(self.setup_summary(cx)))
+                    .child(div().text_xs().text_color(muted).child("⌘P  Search all commands")),
             );
         }
         let mut body = v_flex()
@@ -2421,8 +3373,14 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .key_context("Workspace")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && this.process_project.is_some() {
+                if event.keystroke.key == "escape" && this.setup_open {
+                    this.dismiss_setup(window, cx);
+                    cx.stop_propagation();
+                } else if event.keystroke.key == "escape" && this.process_project.is_some() {
                     this.cancel_process(window, cx);
+                    cx.stop_propagation();
+                } else if event.keystroke.key == "escape" && this.agent_launch.is_some() {
+                    this.cancel_agent_form(window, cx);
                     cx.stop_propagation();
                 } else if event.keystroke.key == "escape"
                     && (this.rename.is_some()
@@ -2455,6 +3413,8 @@ impl Render for Workspace {
             .on_action(cx.listener(Self::rename_terminal))
             .on_action(cx.listener(Self::ask_agent_question))
             .on_action(cx.listener(Self::add_project))
+            .on_action(cx.listener(Self::focus_sidebar))
+            .on_action(cx.listener(Self::toggle_sidebar))
             .on_action(cx.listener(|this, _: &NextTab, window, cx| this.step_tab(1, window, cx)))
             .on_action(
                 cx.listener(|this, _: &PreviousTab, window, cx| this.step_tab(-1, window, cx)),
@@ -2469,37 +3429,50 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Tab8, window, cx| this.pick_tab(7, window, cx)))
             .on_action(cx.listener(|this, _: &Tab9, window, cx| this.pick_tab(8, window, cx)));
         if let Some(error) = &self.error {
-            body = body.child(div().p_2().text_sm().bg(theme.danger).child(error.clone()));
+            body = body.child(
+                div()
+                    .px_4()
+                    .py_3()
+                    .text_sm()
+                    .bg(theme.danger.opacity(0.1))
+                    .text_color(theme.danger)
+                    .child(error.clone()),
+            );
         }
+        // Leave a usable primary pane when a wide saved sidebar meets a
+        // smaller window. The preference is still available on larger windows.
+        let sidebar_max = (f32::from(window.viewport_size().width) - 320.).clamp(220., 520.);
         let sidebar_owner = cx.weak_entity();
-        body = body.child(if self.perf_layout == "no-sidebar" {
-            content.into_any_element()
-        } else {
-            h_resizable("workspace-sidebar-split")
-                .with_state(&self.sidebar_state)
-                .on_resize(move |state, _, cx| {
-                    let width = state.read(cx).sizes().first().copied();
-                    if let Some(width) = width {
-                        let _ = sidebar_owner.update(cx, |this, _| {
-                            this.sidebar_width = f32::from(width);
-                            this.save_layout();
-                        });
-                    }
-                })
-                .child(
-                    resizable_panel()
-                        .size(px(self.sidebar_width))
-                        .flex_none()
-                        .size_range(px(220.)..px(520.))
-                        .child(sidebar),
-                )
-                .child(
-                    resizable_panel()
-                        .size_range(px(320.)..Pixels::MAX)
-                        .child(content),
-                )
-                .into_any_element()
-        });
+        body = body.child(
+            if self.perf_layout == "no-sidebar" || self.sidebar_collapsed {
+                content.into_any_element()
+            } else {
+                h_resizable("workspace-sidebar-split")
+                    .with_state(&self.sidebar_state)
+                    .on_resize(move |state, _, cx| {
+                        let width = state.read(cx).sizes().first().copied();
+                        if let Some(width) = width {
+                            let _ = sidebar_owner.update(cx, |this, _| {
+                                this.sidebar_width = f32::from(width);
+                                this.save_layout();
+                            });
+                        }
+                    })
+                    .child(
+                        resizable_panel()
+                            .size(px(self.sidebar_width.min(sidebar_max)))
+                            .flex_none()
+                            .size_range(px(220.)..px(sidebar_max))
+                            .child(sidebar),
+                    )
+                    .child(
+                        resizable_panel()
+                            .size_range(px(320.)..Pixels::MAX)
+                            .child(content),
+                    )
+                    .into_any_element()
+            },
+        );
         if self.palette_open {
             let entries = self.palette_actions(cx);
             let actions: Vec<_> = entries.iter().map(|(_, action)| action.clone()).collect();
@@ -2538,11 +3511,13 @@ impl Render for Workspace {
                 div()
                     .absolute()
                     .inset_0()
+                    .occlude()
                     .bg(hsla(0., 0., 0., 0.3))
                     .flex()
                     .justify_center()
-                    .pt(px(80.))
-                    .child(div().w(px(560.)).h_auto().child(palette)),
+                    .p_4()
+                    .pt(px(64.))
+                    .child(div().w(px(560.)).max_w_full().h_auto().child(palette)),
             );
         }
         if let Some(notice) = &self.customization_notice {
@@ -2553,7 +3528,9 @@ impl Render for Workspace {
                     .left_0()
                     .right_0()
                     .p_3()
-                    .bg(bg)
+                    .border_t_1()
+                    .border_color(border)
+                    .bg(theme.sidebar)
                     .child(
                         h_flex()
                             .gap_3()
@@ -2573,24 +3550,24 @@ impl Render for Workspace {
         if let Some(preview) = self.customization_preview.clone() {
             let proposal = preview.proposal;
             let reviewed = proposal.clone();
-            body = body.child(div().absolute().inset_0().bg(hsla(0., 0., 0., 0.4))
-                .flex().justify_center().pt(px(60.)).child(
-                    v_flex().w(px(720.)).h(px(560.)).p_4().gap_3().rounded_lg().bg(bg)
-                        .child(div().font_bold().child("Review DevDesk customization"))
-                        .child(div().text_sm().child("Review the proposed configuration below, including commands and autostart. Appearance updates live. Running processes require a restart; autostart applies when a project is opened. Undo restores configuration, not command side effects."))
-                        .child(v_flex().id("customization-proposal").flex_1().min_h_0().overflow_y_scroll().text_sm()
+            body = body.child(div().absolute().inset_0().occlude().bg(hsla(0., 0., 0., 0.4))
+                .flex().justify_center().p_4().pt(px(64.)).child(
+                    dialog_panel(720., theme).h(px(560.)).max_h(px((f32::from(window.viewport_size().height) - 96.).max(120.)))
+                        .child(div().font_semibold().child("Review customization"))
+                        .child(div().text_sm().text_color(muted).child("Check commands and autostart before applying. Appearance updates immediately; restart processes for command changes. Autostart applies on project open. Undo restores configuration, but cannot undo executed commands."))
+                        .child(v_flex().id("customization-proposal").flex_1().min_h_0().overflow_y_scroll().p_3().rounded_md().bg(theme.muted).text_sm().font_family(theme.mono_font_family.clone())
                             .children(preview.changes.lines().chain(std::iter::once("— Complete proposed configuration —")).chain(proposal.lines()).enumerate().map(|(index, line)| {
-                                div().id(SharedString::from(format!("proposal-line-{index}"))).child(line.to_string())
+                                div().id(SharedString::from(format!("proposal-line-{index}"))).when(line.starts_with("+ "), |row| row.text_color(theme.success)).when(line.starts_with("− "), |row| row.text_color(theme.danger)).child(line.to_string())
                             })))
                         .child(h_flex().gap_3()
-                            .child(Button::new("apply-customization").label("Apply changes")
+                            .child(Button::new("apply-customization").primary().label("Apply changes")
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.core.send(CoreCommand::ApplyCustomization(reviewed.clone()));
                                     this.customization_preview = None;
                                     this.restore_focus(window, cx);
                                     cx.notify();
                                 })))
-                            .child(Button::new("cancel-customization").label("Cancel")
+                            .child(Button::new("cancel-customization").ghost().label("Cancel")
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.customization_preview = None;
                                     this.restore_focus(window, cx);
@@ -2605,51 +3582,44 @@ impl Render for Workspace {
                 div()
                     .absolute()
                     .inset_0()
+                    .occlude()
                     .bg(hsla(0., 0., 0., 0.3))
                     .flex()
                     .justify_center()
                     .items_start()
-                    .pt(px(100.))
+                    .p_4().pt(px(64.))
                     .child(
-                        v_flex()
-                            .w(px(560.))
-                            .h_auto()
-                            .p_4()
-                            .gap_3()
-                            .rounded_lg()
-                            .bg(bg)
-                            .child(if self.customization_provider.is_some() {
-                                "Customize DevDesk · describe your workspace"
+                        dialog_panel(560., theme)
+                            .child(div().font_semibold().child(if self.customization_provider.is_some() {
+                                "Customize Tervy"
                             } else if self.question_parent.is_some() {
-                                "Ask Agent Question · read-only snapshot"
+                                "Ask a read-only question"
                             } else {
                                 "Rename terminal"
-                            })
-                            .when(self.customization_provider.is_some(), |panel| panel.child(div().text_sm().child("Try: use warm-dark, set text to 16, and narrow the sidebar. The agent prepares a proposal; choose Review Customization in Cmd-P when ready.")))
-                            .child(Input::new(&self.rename_input))
+                            }))
+                            .when(self.customization_provider.is_some(), |panel| panel.child(div().text_sm().text_color(muted).child("Try: use warm-dark, set text to 16, and narrow the sidebar. The agent prepares a proposal; choose Review Customization in Cmd-P when ready.")))
+                            .child(v_flex().gap_2()
+                                .when(self.perf_layout == "modal-focus", |group| group.on_children_prepainted(modal_focus_smoke::measure("Rename", 1)))
+                                .child(div().text_sm().child(if self.customization_provider.is_some() { "Describe your changes" }
+                                    else if self.question_parent.is_some() { "Question" } else { "Terminal name" }))
+                                .child(modal_input(&self.rename_input, if self.customization_provider.is_some() { "Describe your changes" } else if self.question_parent.is_some() { "Question" } else { "Terminal name" })))
                             .child(
                                 h_flex()
                                     .gap_4()
                                     .child(
-                                        div()
-                                            .id("rename-save")
-                                            .cursor_pointer()
-                                            .child(if self.customization_provider.is_some() {
-                                                "Start conversation ↵"
+                                        Button::new("rename-save").primary().label(if self.customization_provider.is_some() {
+                                                "Start conversation"
                                             } else if self.question_parent.is_some() {
-                                                "Ask ↵"
+                                                "Ask question"
                                             } else {
-                                                "Save ↵"
+                                                "Save name"
                                             })
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.save_rename(window, cx)
                                             })),
                                     )
                                     .child(
-                                        div()
-                                            .id("rename-cancel")
-                                            .cursor_pointer()
-                                            .child("Cancel")
+                                        Button::new("rename-cancel").ghost().label("Cancel")
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.rename = None;
                                                 this.customization_provider = None;
@@ -2662,14 +3632,21 @@ impl Render for Workspace {
                     ),
             );
         }
+        if self.setup_open {
+            body = body.child(self.setup_dialog(window, cx));
+        }
         if self.process_project.is_some() {
             body = body.child(self.process_form(cx));
+        }
+        if self.agent_launch.is_some() {
+            body = body.child(self.agent_form(cx));
         }
         if let Some(remaining) = self.shutdown {
             body = body.child(
                 div()
                     .absolute()
                     .inset_0()
+                    .occlude()
                     .bg(hsla(0., 0., 0., 0.5))
                     .flex()
                     .items_center()

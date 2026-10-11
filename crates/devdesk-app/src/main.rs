@@ -5,6 +5,7 @@ mod logging;
 mod m2_perf;
 mod panic_reporter;
 mod perf;
+mod setup;
 mod terminal_element;
 mod terminal_perf;
 mod terminal_view;
@@ -27,6 +28,10 @@ fn main() {
             arguments.get(2).map(String::as_str),
             arguments.last().map(String::as_str),
         );
+        return;
+    }
+    if arguments.get(1).map(String::as_str) == Some("mcp") {
+        devdesk_core::mcp::run_stdio();
         return;
     }
     let perf = perf::StartupTimer::from_env();
@@ -74,7 +79,7 @@ fn main() {
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
     }
-    tracing::info!(version = env!("CARGO_PKG_VERSION"), "DevDesk starting");
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "Tervy starting");
     let path = config::support_directory();
     // Benchmark windows use an in-memory project and do not contend with the
     // owner's instance or modify their configuration.
@@ -86,7 +91,7 @@ fn main() {
             Ok(Some(instance)) => Some(instance),
             Ok(None) => return,
             Err(error) => {
-                eprintln!("Could not start DevDesk: {error}");
+                eprintln!("Could not start Tervy: {error}");
                 return;
             }
         }
@@ -131,6 +136,7 @@ fn main() {
         }
         let options = WindowOptions {
             window_bounds: Some(WindowBounds::centered(size(px(1200.), px(780.)), cx)),
+            window_min_size: Some(size(px(560.), px(480.))),
             ..Default::default()
         };
         let result = gpui_kit::open_window(options, cx, |window, cx| {
@@ -189,6 +195,7 @@ fn install_menus_and_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-p", Palette, Some("Workspace")),
+        KeyBinding::new("cmd-b", ToggleSidebar, Some("Workspace")),
         KeyBinding::new("cmd-t", NewTerminal, Some("Workspace")),
         KeyBinding::new("cmd-w", CloseTerminal, Some("Workspace")),
         KeyBinding::new("cmd-shift-r", RenameTerminal, Some("Workspace")),
@@ -207,8 +214,9 @@ fn install_menus_and_keys(cx: &mut App) {
         KeyBinding::new("cmd-9", Tab9, Some("Workspace")),
     ]);
     cx.bind_keys(terminal_view::key_bindings());
+    cx.bind_keys(sidebar_key_bindings());
     cx.set_menus([
-        Menu::new("DevDesk").items([MenuItem::action("Quit DevDesk", Quit)]),
+        Menu::new("Tervy").items([MenuItem::action("Quit Tervy", Quit)]),
         Menu::new("File").items([
             MenuItem::action("Add Project…", AddProject),
             MenuItem::action("New Terminal", NewTerminal),

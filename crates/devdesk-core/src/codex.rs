@@ -185,8 +185,15 @@ impl AgentProvider for CodexProvider {
                 parent_session_id, ..
             } => vec!["fork".into(), parent_session_id.clone()],
         };
+        args.extend(crate::agent::launch_args(c.record)?);
         args.push("--no-daemon".into());
         let settings = Settings::read(environment, &c.record.cwd, side)?;
+        if settings.servers.contains("tervy_local") {
+            return Err(
+                "Codex already has an MCP server named tervy_local; rename it to use Tervy prompts"
+                    .into(),
+            );
+        }
         let helper = vec![
             c.helper.to_string_lossy().into_owned(),
             "hook".into(),
@@ -206,6 +213,12 @@ impl AgentProvider for CodexProvider {
             "tui.notification_condition=\"always\"".into(),
             "-c".into(),
             "tui.terminal_title=[\"session-id\"]".into(),
+        ]);
+        args.extend([
+            "-c".into(), format!("mcp_servers.tervy_local.command={}", serde_json::to_string(&c.helper.to_string_lossy()).map_err(|e| e.to_string())?),
+            "-c".into(), if side { "mcp_servers.tervy_local.args=[\"mcp\",\"--read-only\"]" } else { "mcp_servers.tervy_local.args=[\"mcp\"]" }.into(),
+            "-c".into(), "mcp_servers.tervy_local.env_vars=[\"DEVDESK_AGENT_ID\",\"DEVDESK_LAUNCH_ID\",\"DEVDESK_HOOK_TOKEN\",\"DEVDESK_MCP_SOCKET\",\"DEVDESK_MCP_ROLE\"]".into(),
+            "-c".into(), "mcp_servers.tervy_local.enabled=true".into(),
         ]);
         if side {
             args.extend(["-s", "read-only", "-a", "never"].map(str::to_owned));
@@ -303,6 +316,7 @@ mod tests {
             name: "Codex".into(),
             cwd: folder.join("nested"),
             role: Role::Primary,
+            launch_args: vec![],
             provider: Provider::Codex,
             session_id: Some("20000000-0000-4000-8000-000000000002".into()),
             parent: None,
@@ -328,7 +342,36 @@ mod tests {
         )
     }
     fn common() -> Vec<String> {
-        ["--no-daemon", "-c", "notify=[\"/Applications/DevDesk.app/Contents/MacOS/devdesk\",\"hook\",\"codex-notify\"]", "-c", "tui.notifications=[\"approval-requested\"]", "-c", "tui.notification_method=\"bel\"", "-c", "tui.notification_condition=\"always\"", "-c", "tui.terminal_title=[\"session-id\"]"].map(str::to_owned).into()
+        ["--no-daemon", "-c", "notify=[\"/Applications/DevDesk.app/Contents/MacOS/devdesk\",\"hook\",\"codex-notify\"]", "-c", "tui.notifications=[\"approval-requested\"]", "-c", "tui.notification_method=\"bel\"", "-c", "tui.notification_condition=\"always\"", "-c", "tui.terminal_title=[\"session-id\"]", "-c", "mcp_servers.tervy_local.command=\"/Applications/DevDesk.app/Contents/MacOS/devdesk\"", "-c", "mcp_servers.tervy_local.args=[\"mcp\"]", "-c", "mcp_servers.tervy_local.env_vars=[\"DEVDESK_AGENT_ID\",\"DEVDESK_LAUNCH_ID\",\"DEVDESK_HOOK_TOKEN\",\"DEVDESK_MCP_SOCKET\",\"DEVDESK_MCP_ROLE\"]", "-c", "mcp_servers.tervy_local.enabled=true"].map(str::to_owned).into()
+    }
+    #[test]
+    fn custom_flags_survive_resume_and_are_excluded_from_read_only_sides() {
+        let (folder, environment) = fixture();
+        std::fs::write(folder.0.join(".codex/config.toml"), "").unwrap();
+        let mut record = record(&folder.0);
+        record.launch_args = vec![
+            "--approve-for-me".into(),
+            "--model".into(),
+            "value with spaces".into(),
+        ];
+        for request in [Request::New, Request::Resume, Request::ResumePicker] {
+            let spec = launch(&record, &request, &environment).unwrap();
+            assert!(
+                spec.args
+                    .windows(record.launch_args.len())
+                    .any(|args| args == record.launch_args)
+            );
+            assert!(spec.args.contains(&"--no-daemon".into()));
+        }
+        record.role = Role::Side;
+        let spec = launch(&record, &Request::Resume, &environment).unwrap();
+        assert!(!spec.args.contains(&"--approve-for-me".into()));
+        assert!(!spec.args.contains(&"value with spaces".into()));
+        assert!(
+            spec.args
+                .windows(4)
+                .any(|args| args == ["-s", "read-only", "-a", "never"])
+        );
     }
     #[test]
     fn complete_codex_argv_profiles_notify_and_safe_mcp_keys() {
@@ -375,6 +418,10 @@ mod tests {
         let spec = launch(&record, &request, &environment).unwrap();
         let mut expected = vec!["fork".into(), record.session_id.clone().unwrap()];
         expected.extend(common());
+        *expected
+            .iter_mut()
+            .find(|arg| arg.as_str() == "mcp_servers.tervy_local.args=[\"mcp\"]")
+            .unwrap() = "mcp_servers.tervy_local.args=[\"mcp\",\"--read-only\"]".into();
         expected.extend(
             [
                 "-s",

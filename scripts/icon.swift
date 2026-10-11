@@ -1,16 +1,37 @@
-// Original DevDesk app icon, generated locally with Apple's drawing APIs.
+// Render the canonical vector geometry; no independent raster logo source.
 import AppKit
-let side: CGFloat = 1024
-let image = NSImage(size: NSSize(width: side, height: side))
+import Foundation
+let source = URL(fileURLWithPath: CommandLine.arguments[1])
+let brand = try JSONSerialization.jsonObject(with: Data(contentsOf: source)) as! [String: Any]
+let colors = brand["colors"] as! [String: String]
+let commands = brand["mark"] as! [[Any]]
+func color(_ hex: String) -> NSColor {
+    let value = UInt32(hex.dropFirst(), radix: 16)!
+    return NSColor(srgbRed: CGFloat((value >> 16) & 255) / 255,
+                   green: CGFloat((value >> 8) & 255) / 255,
+                   blue: CGFloat(value & 255) / 255, alpha: 1)
+}
+let image = NSImage(size: NSSize(width: 1024, height: 1024))
 image.lockFocus()
-NSColor(calibratedRed: 0.07, green: 0.10, blue: 0.17, alpha: 1).setFill()
-NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: side, height: side), xRadius: 200, yRadius: 200).fill()
-NSColor(calibratedRed: 0.12, green: 0.18, blue: 0.29, alpha: 1).setFill()
-NSBezierPath(roundedRect: NSRect(x: 115, y: 180, width: 794, height: 664), xRadius: 50, yRadius: 50).fill()
-NSColor(calibratedRed: 0.27, green: 0.60, blue: 0.98, alpha: 1).setFill()
-NSRect(x: 145, y: 210, width: 165, height: 604).fill()
-let text: NSString = ">_"
-text.draw(at: NSPoint(x: 355, y: 350), withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 245, weight: .medium), .foregroundColor: NSColor.white])
+color(colors["graphite"]!).setFill()
+NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: 1024, height: 1024), xRadius: 224, yRadius: 224).fill()
+let path = NSBezierPath()
+path.windingRule = .evenOdd
+for command in commands {
+    func point(_ index: Int) -> NSPoint {
+        NSPoint(x: (command[index] as! NSNumber).doubleValue * 16,
+                y: 1024 - (command[index + 1] as! NSNumber).doubleValue * 16)
+    }
+    switch command[0] as! String {
+    case "M": path.move(to: point(1))
+    case "L": path.line(to: point(1))
+    case "C": path.curve(to: point(5), controlPoint1: point(1), controlPoint2: point(3))
+    case "Z": path.close()
+    default: fatalError("Unknown brand path command")
+    }
+}
+color(colors["white"]!).setFill()
+path.fill()
 image.unlockFocus()
 let bitmap = NSBitmapImageRep(data: image.tiffRepresentation!)!
-try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[1]))
+try bitmap.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: CommandLine.arguments[2]))

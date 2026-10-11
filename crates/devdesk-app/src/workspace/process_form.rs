@@ -11,6 +11,8 @@ impl Workspace {
         if self.process_saving {
             return;
         }
+        self.setup_open = false;
+        self.agent_launch = None;
         self.rename = None;
         self.question_parent = None;
         self.customization_provider = None;
@@ -76,13 +78,7 @@ impl Workspace {
             .find(|p| Some(&p.id) == self.process_project.as_ref())
             .map(|p| p.name.as_str())
             .unwrap_or("project");
-        let mut panel = v_flex()
-            .w(px(480.))
-            .h_auto()
-            .p_4()
-            .gap_3()
-            .rounded_lg()
-            .bg(cx.theme().background)
+        let mut panel = dialog_panel(480., cx.theme())
             .child(
                 div()
                     .font_semibold()
@@ -90,23 +86,27 @@ impl Workspace {
             )
             .child(
                 v_flex()
-                    .gap_1()
+                    .gap_2()
                     .child(div().text_sm().child("Name"))
-                    .child(Input::new(&self.process_name_input)),
+                    .when(self.perf_layout == "modal-focus", |group| {
+                        group.on_children_prepainted(modal_focus_smoke::measure("Process name", 1))
+                    })
+                    .child(modal_input(&self.process_name_input, "Process name")),
             )
             .child(
                 v_flex()
-                    .gap_1()
+                    .gap_2()
                     .child(div().text_sm().child("Command"))
-                    .child(Input::new(&self.process_command_input)),
+                    .when(self.perf_layout == "modal-focus", |group| {
+                        group.on_children_prepainted(modal_focus_smoke::measure("Command", 1))
+                    })
+                    .child(modal_input(&self.process_command_input, "Command")),
             )
             .child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child(
-                        "Runs in the project folder. After adding, use its start button to run it.",
-                    ),
+                    .child("Runs in the project folder. Add it now, then choose Start when ready."),
             );
         if let Some(error) = &self.process_error {
             panel = panel.child(
@@ -121,6 +121,8 @@ impl Workspace {
                 .gap_3()
                 .child(
                     Button::new("save-process")
+                        .primary()
+                        .loading(self.process_saving)
                         .label(if self.process_saving {
                             "Adding…"
                         } else {
@@ -131,6 +133,7 @@ impl Workspace {
                 )
                 .child(
                     Button::new("cancel-process")
+                        .ghost()
                         .label("Cancel")
                         .disabled(self.process_saving)
                         .on_click(
@@ -141,11 +144,13 @@ impl Workspace {
         div()
             .absolute()
             .inset_0()
+            .occlude()
             .bg(hsla(0., 0., 0., 0.3))
             .flex()
             .justify_center()
             .items_start()
-            .pt(px(100.))
+            .p_4()
+            .pt(px(64.))
             .child(panel)
             .into_any_element()
     }

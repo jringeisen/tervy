@@ -225,7 +225,7 @@ pub fn parse(text: &str, home: &Path) -> Result<Config, String> {
             .agents
             .default_provider
             .as_deref()
-            .is_some_and(|provider| !["claude", "codex"].contains(&provider))
+            .is_some_and(|provider| crate::agent::Provider::from_command(provider).is_none())
         {
             return Err(format!(
                 "Project '{}': unknown agent provider",

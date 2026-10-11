@@ -589,6 +589,10 @@ impl TerminalView {
         }
     }
 
+    pub fn insert_text(&mut self, text: &str) {
+        self.paste_text(text);
+    }
+
     fn cell(&self, position: Point<Pixels>) -> (usize, usize) {
         let col = ((position.x - self.bounds.origin.x) / self.metrics.width)
             .floor()

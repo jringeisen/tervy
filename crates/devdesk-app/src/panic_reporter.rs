@@ -22,7 +22,7 @@ impl PanicReporter {
                 || "unknown location".into(),
                 |location| location.to_string(),
             );
-            let message = format!("DevDesk panic at {location}; shutdown requested\n");
+            let message = format!("Tervy panic at {location}; shutdown requested\n");
             if let Some(file) = &file {
                 file.write(message.as_bytes());
             }

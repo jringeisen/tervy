@@ -13,12 +13,55 @@ pub enum Provider {
     #[default]
     Claude,
     Codex,
+    Gemini,
+    OpenCode,
+    Aider,
 }
 impl Provider {
+    pub const ALL: [Self; 5] = [
+        Self::Claude,
+        Self::Codex,
+        Self::Gemini,
+        Self::OpenCode,
+        Self::Aider,
+    ];
+
+    pub fn command(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini",
+            Self::OpenCode => "opencode",
+            Self::Aider => "aider",
+        }
+    }
+
+    pub fn from_command(command: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|provider| provider.command() == command)
+    }
+
+    /// Providers with integrated session identity and read-only side conversations.
+    pub fn tracks_sessions(self) -> bool {
+        matches!(self, Self::Claude | Self::Codex)
+    }
+
+    pub fn check_installed(self, environment: &ShellEnvironment) -> Result<PathBuf, String> {
+        match self {
+            Self::Claude => ClaudeProvider.check_installed(environment),
+            Self::Codex => crate::codex::CodexProvider.check_installed(environment),
+            Self::Gemini | Self::OpenCode | Self::Aider => installed(self.command(), environment),
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Claude => "Claude",
             Self::Codex => "Codex",
+            Self::Gemini => "Gemini CLI",
+            Self::OpenCode => "OpenCode",
+            Self::Aider => "Aider",
         }
     }
 }
@@ -44,6 +87,8 @@ impl Role {
 pub struct Record {
     #[serde(default)]
     pub provider: Provider,
+    #[serde(default)]
+    pub launch_args: Vec<String>,
     pub id: String,
     pub project: String,
     pub name: String,
@@ -55,6 +100,32 @@ pub struct Record {
     pub parent: Option<String>,
     #[serde(default)]
     pub snapshot_at: Option<i64>,
+}
+
+/// Parse quoted CLI arguments without running a shell or expanding variables.
+pub fn parse_launch_args(input: &str) -> Result<Vec<String>, String> {
+    if input.len() > 16_384 || input.contains('\0') {
+        return Err("Agent arguments must be at most 16 KiB and contain no null bytes".into());
+    }
+    shlex::split(input)
+        .ok_or_else(|| "Close any open quotes or trailing escape in the arguments".into())
+}
+
+pub fn format_launch_args(args: &[String]) -> String {
+    shlex::try_join(args.iter().map(String::as_str)).unwrap_or_else(|_| args.join(" "))
+}
+
+pub(crate) fn launch_args(record: &Record) -> Result<Vec<String>, String> {
+    if record.role == Role::Side {
+        // A restored or edited record must never bypass the side profile.
+        return Ok(vec![]);
+    }
+    if record.launch_args.iter().map(String::len).sum::<usize>() > 16_384
+        || record.launch_args.iter().any(|arg| arg.contains('\0'))
+    {
+        return Err("Invalid agent launch arguments".into());
+    }
+    Ok(record.launch_args.clone())
 }
 #[derive(Clone, Debug)]
 pub enum Request {
@@ -70,6 +141,7 @@ pub enum Request {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Status {
     Launching,
+    Running,
     Idle,
     Working,
     NeedsApproval,
@@ -208,7 +280,7 @@ impl Runtime {
         }
     }
     pub fn apply(&mut self, event: &HookEvent) {
-        if self.info.status == Status::Exited {
+        if self.info.status == Status::Exited || !self.info.record.provider.tracks_sessions() {
             return;
         }
         if self.info.record.provider == Provider::Codex {
@@ -315,6 +387,162 @@ pub trait AgentProvider {
     ) -> Result<SpawnSpec, String>;
     fn check_installed(&self, environment: &ShellEnvironment) -> Result<PathBuf, String>;
 }
+
+/// Plain interactive CLIs keep their own authentication and settings. They do
+/// not report DevDesk session identities or promise a read-only fork profile.
+pub struct InteractiveProvider(pub Provider);
+impl AgentProvider for InteractiveProvider {
+    fn check_installed(&self, environment: &ShellEnvironment) -> Result<PathBuf, String> {
+        installed(self.0.command(), environment)
+    }
+
+    fn build_launch(
+        &self,
+        context: &Context<'_>,
+        environment: &ShellEnvironment,
+    ) -> Result<SpawnSpec, String> {
+        if self.0.tracks_sessions()
+            || context.record.provider != self.0
+            || context.record.role != Role::Primary
+            || !matches!(context.request, Request::New)
+        {
+            return Err("This agent supports interactive launches only; session resume and side conversations are unavailable".into());
+        }
+        let mut variables = environment.variables.clone();
+        if self.0 == Provider::Gemini {
+            variables = hook_environment(context, environment);
+            let path = gemini_mcp_settings(context, &variables)?;
+            variables.insert(
+                "GEMINI_CLI_SYSTEM_DEFAULTS_PATH".into(),
+                path.to_string_lossy().into_owned(),
+            );
+        } else if self.0 == Provider::OpenCode {
+            variables = hook_environment(context, environment);
+            let mut config: serde_json::Value = variables
+                .get("OPENCODE_CONFIG_CONTENT")
+                .map(|text| {
+                    serde_json::from_str(text)
+                        .map_err(|_| "OpenCode inline config must be valid JSON".to_string())
+                })
+                .transpose()?
+                .unwrap_or_else(|| serde_json::json!({}));
+            let root = config
+                .as_object_mut()
+                .ok_or("OpenCode inline config must be an object")?;
+            let mcp = root
+                .entry("mcp")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .ok_or("OpenCode MCP config must be an object")?;
+            if mcp.contains_key("tervy_local") {
+                return Err("OpenCode already has an MCP server named tervy_local".into());
+            }
+            mcp.insert(
+                "tervy_local".into(),
+                serde_json::json!({
+                    "type":"local",
+                    "command":[context.helper.to_string_lossy(),"mcp"],
+                    "enabled":true,
+                    "environment":{
+                        "DEVDESK_AGENT_ID":"{env:DEVDESK_AGENT_ID}",
+                        "DEVDESK_LAUNCH_ID":"{env:DEVDESK_LAUNCH_ID}",
+                        "DEVDESK_HOOK_TOKEN":"{env:DEVDESK_HOOK_TOKEN}",
+                        "DEVDESK_MCP_SOCKET":"{env:DEVDESK_MCP_SOCKET}",
+                        "DEVDESK_MCP_ROLE":"{env:DEVDESK_MCP_ROLE}"
+                    }
+                }),
+            );
+            variables.insert("OPENCODE_CONFIG_CONTENT".into(), config.to_string());
+        }
+        Ok(SpawnSpec {
+            program: self
+                .check_installed(environment)?
+                .to_string_lossy()
+                .into_owned(),
+            args: launch_args(context.record)?,
+            cwd: context.record.cwd.clone(),
+            env: variables,
+            scrollback_lines: context.lines,
+        })
+    }
+}
+
+fn gemini_mcp_settings(
+    c: &Context<'_>,
+    variables: &std::collections::HashMap<String, String>,
+) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+    let source = variables
+        .get("GEMINI_CLI_SYSTEM_DEFAULTS_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from("/Library/Application Support/GeminiCli/system-defaults.json")
+        });
+    let mut settings = match std::fs::metadata(&source) {
+        Ok(metadata) => {
+            if metadata.len() > 1_048_576 {
+                return Err("Gemini system defaults are too large to add Tervy MCP".into());
+            }
+            serde_json::from_slice::<serde_json::Value>(
+                &std::fs::read(&source).map_err(|e| e.to_string())?,
+            )
+            .map_err(|_| "Gemini system defaults must be valid JSON".to_string())?
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(error) => return Err(format!("Cannot read Gemini system defaults: {error}")),
+    };
+    let root = settings
+        .as_object_mut()
+        .ok_or("Gemini system defaults must be a JSON object")?;
+    let servers = root
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or("Gemini mcpServers must be a JSON object")?;
+    if servers.contains_key("tervy_local") {
+        return Err("Gemini already has an MCP server named tervy_local".into());
+    }
+    servers.insert(
+        "tervy_local".into(),
+        serde_json::json!({
+            "command":c.helper.to_string_lossy(), "args":["mcp"], "trust":false,
+            "env":{
+                "DEVDESK_AGENT_ID":"$DEVDESK_AGENT_ID",
+                "DEVDESK_LAUNCH_ID":"$DEVDESK_LAUNCH_ID",
+                "DEVDESK_HOOK_TOKEN":"$DEVDESK_HOOK_TOKEN",
+                "DEVDESK_MCP_SOCKET":"$DEVDESK_MCP_SOCKET",
+                "DEVDESK_MCP_ROLE":"$DEVDESK_MCP_ROLE"
+            }
+        }),
+    );
+    let directory = c
+        .socket
+        .parent()
+        .ok_or("Tervy socket directory is missing")?;
+    let metadata = std::fs::metadata(directory).map_err(|e| e.to_string())?;
+    if metadata.uid() != unsafe { libc::geteuid() } || metadata.permissions().mode() & 0o077 != 0 {
+        return Err("Tervy socket directory must be private for Gemini settings".into());
+    }
+    let destination = directory.join("gemini-mcp.json");
+    let temporary = directory.join(format!(".gemini-mcp-{}.json", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<(), String> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|e| e.to_string())?;
+        file.write_all(&serde_json::to_vec(&settings).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        std::fs::rename(&temporary, &destination).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result.map(|()| destination)
+}
 pub struct ClaudeProvider;
 pub const OBSERVER_PREAMBLE: &str = "You are a read-only observer of a snapshot. The original session is still running in another window. An interrupted tool in this snapshot is still in progress in the original; do not retry, continue or interact with it. Answer the question using the inherited context. You cannot observe the parent’s live status.";
 
@@ -385,12 +613,20 @@ impl AgentProvider for ClaudeProvider {
         };
         let command = format!("{} hook claude", shell_quote(&c.helper.to_string_lossy()));
         let hooks: serde_json::Map<String,serde_json::Value>=EVENTS.iter().map(|name| (name.to_string(),serde_json::json!([{"hooks":[{"type":"command","command":command,"timeout":5}]}]))).collect();
+        args.extend(launch_args(c.record)?);
+        let mcp_args = if profile == LaunchProfile::ReadOnlySide {
+            vec!["mcp", "--read-only"]
+        } else {
+            vec!["mcp"]
+        };
+        let mcp = serde_json::json!({"mcpServers":{"tervy_local":{"type":"stdio","command":c.helper.to_string_lossy(),"args":mcp_args}}});
+        args.extend(["--mcp-config".into(), mcp.to_string()]);
         args.extend([
             "--settings".into(),
             serde_json::json!({"hooks":hooks}).to_string(),
         ]);
         if profile == LaunchProfile::ReadOnlySide {
-            args.extend(["--restricted","--strict-mcp-config","--tools=Read,Grep,Glob","--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*,ShareOnboardingGuide","--disable-slash-commands","--permission-mode=dontAsk"].map(str::to_owned));
+            args.extend(["--restricted","--strict-mcp-config","--tools=Read,Grep,Glob,mcp__tervy_local__list_prompts,mcp__tervy_local__read_prompt","--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,ShareOnboardingGuide","--disable-slash-commands","--permission-mode=dontAsk"].map(str::to_owned));
         }
         if let Request::Fork { question, .. } = c.request {
             args.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: {question}"));
@@ -436,6 +672,22 @@ pub(crate) fn hook_environment(
             "DEVDESK_HOOK_SOCKET",
             c.socket.to_string_lossy().into_owned(),
         ),
+        (
+            "DEVDESK_MCP_SOCKET",
+            c.socket
+                .with_file_name("mcp.sock")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+        (
+            "DEVDESK_MCP_ROLE",
+            if c.record.role == Role::Side {
+                "read"
+            } else {
+                "write"
+            }
+            .into(),
+        ),
     ] {
         variables.insert(key.into(), value);
     }
@@ -448,6 +700,9 @@ pub fn version_warning(
     program: &str,
     environment: &ShellEnvironment,
 ) -> Option<String> {
+    if !provider.tracks_sessions() {
+        return None;
+    }
     use std::{
         io::Read,
         os::fd::AsRawFd,
@@ -497,6 +752,7 @@ pub fn version_warning(
             if match provider {
                 Provider::Claude => version.split_whitespace().next() == Some("2.1.295"),
                 Provider::Codex => version.trim() == "codex-cli 0.162.0",
+                Provider::Gemini | Provider::OpenCode | Provider::Aider => true,
             } =>
         {
             None
@@ -518,6 +774,166 @@ fn shell_quote(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn launch_arguments_preserve_quotes_and_never_expand_shell_expressions() {
+        let args = parse_launch_args(
+            "--approve-for-me --model 'value with spaces' \"$(touch marker)\" ''",
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "--approve-for-me",
+                "--model",
+                "value with spaces",
+                "$(touch marker)",
+                ""
+            ]
+        );
+        assert_eq!(parse_launch_args(&format_launch_args(&args)).unwrap(), args);
+        assert!(parse_launch_args("--model 'unfinished").is_err());
+        assert!(parse_launch_args("--model value\\").is_err());
+        assert!(parse_launch_args("bad\0argument").is_err());
+        assert!(parse_launch_args(&"a".repeat(16_385)).is_err());
+        let mut record = record();
+        record.launch_args = args.clone();
+        assert_eq!(launch_args(&record).unwrap(), args);
+        record.role = Role::Side;
+        assert!(launch_args(&record).unwrap().is_empty());
+    }
+    #[test]
+    fn interactive_agents_launch_without_overriding_settings_and_reject_session_profiles() {
+        use std::os::unix::fs::PermissionsExt;
+        let folder = std::env::temp_dir().join(format!(
+            "devdesk-interactive-agents-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = folder.join("devdesk.sock");
+        let environment = ShellEnvironment {
+            shell: "/bin/sh".into(),
+            variables: [
+                ("PATH".into(), folder.to_string_lossy().into_owned()),
+                ("USER_SETTING".into(), "preserved".into()),
+                (
+                    "GEMINI_CLI_SYSTEM_DEFAULTS_PATH".into(),
+                    folder
+                        .join("missing-defaults.json")
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+            ]
+            .into(),
+            warning: None,
+        };
+        for provider in [Provider::Gemini, Provider::OpenCode, Provider::Aider] {
+            let cli = folder.join(provider.command());
+            std::fs::write(&cli, "#!/bin/sh\nexit 99\n").unwrap();
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut record = record();
+            record.provider = provider;
+            record.session_id = None;
+            let build = |record: &Record, request: &Request| {
+                InteractiveProvider(provider).build_launch(
+                    &Context {
+                        record,
+                        request,
+                        launch: 1,
+                        token: "token",
+                        socket: &socket,
+                        helper: Path::new("/tmp/helper"),
+                        lines: 5000,
+                    },
+                    &environment,
+                )
+            };
+            let spec = build(&record, &Request::New).unwrap();
+            assert_eq!(spec.program, cli.to_string_lossy());
+            assert!(spec.args.is_empty());
+            record.launch_args = vec!["--custom-flag".into(), "value with spaces".into()];
+            assert_eq!(
+                build(&record, &Request::New).unwrap().args,
+                record.launch_args
+            );
+            assert_eq!(spec.cwd, record.cwd);
+            if provider == Provider::Gemini {
+                let settings: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(&spec.env["GEMINI_CLI_SYSTEM_DEFAULTS_PATH"]).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(
+                    settings["mcpServers"]["tervy_local"]["command"],
+                    "/tmp/helper"
+                );
+                assert_eq!(
+                    settings["mcpServers"]["tervy_local"]["env"]["DEVDESK_HOOK_TOKEN"],
+                    "$DEVDESK_HOOK_TOKEN"
+                );
+                assert_eq!(spec.env["DEVDESK_MCP_ROLE"], "write");
+                let defaults = folder.join("missing-defaults.json");
+                std::fs::write(
+                    &defaults,
+                    r#"{"theme":"preserved","mcpServers":{"other":{"command":"other"}}}"#,
+                )
+                .unwrap();
+                let merged = build(&record, &Request::New).unwrap();
+                let settings: serde_json::Value = serde_json::from_slice(
+                    &std::fs::read(&merged.env["GEMINI_CLI_SYSTEM_DEFAULTS_PATH"]).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(settings["theme"], "preserved");
+                assert_eq!(settings["mcpServers"]["other"]["command"], "other");
+                std::fs::write(
+                    &defaults,
+                    r#"{"mcpServers":{"tervy_local":{"command":"other"}}}"#,
+                )
+                .unwrap();
+                assert!(build(&record, &Request::New).is_err());
+                std::fs::remove_file(defaults).unwrap();
+            } else if provider == Provider::OpenCode {
+                assert_eq!(spec.env["USER_SETTING"], "preserved");
+                let config: serde_json::Value =
+                    serde_json::from_str(&spec.env["OPENCODE_CONFIG_CONTENT"]).unwrap();
+                assert_eq!(
+                    config["mcp"]["tervy_local"]["command"],
+                    serde_json::json!(["/tmp/helper", "mcp"])
+                );
+                assert_eq!(spec.env["DEVDESK_MCP_ROLE"], "write");
+            } else {
+                assert_eq!(spec.env, environment.variables);
+            }
+            assert_eq!(spec.scrollback_lines, 5000);
+            assert_eq!(Provider::from_command(provider.command()), Some(provider));
+            assert_eq!(
+                serde_json::from_str::<Record>(&serde_json::to_string(&record).unwrap())
+                    .unwrap()
+                    .provider,
+                provider
+            );
+            for request in [
+                Request::Resume,
+                Request::ResumePicker,
+                Request::Prompt("prompt".into()),
+                Request::Fork {
+                    parent_session_id: "parent".into(),
+                    question: "question".into(),
+                },
+            ] {
+                assert!(build(&record, &request).is_err());
+            }
+            record.role = Role::Side;
+            assert!(build(&record, &Request::New).is_err());
+            record.role = Role::Primary;
+            let mut runtime = Runtime::new(record, Request::New);
+            runtime.info.status = Status::Running;
+            runtime.apply(&event("PermissionRequest", None));
+            runtime.input(true, std::time::Duration::ZERO);
+            runtime.bell();
+            assert_eq!(runtime.info.status, Status::Running);
+        }
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     fn record() -> Record {
         Record {
             id: "10000000-0000-4000-8000-000000000001".into(),
@@ -525,6 +941,7 @@ mod tests {
             name: "Claude notes".into(),
             cwd: PathBuf::from("/tmp/stored-project"),
             role: Role::Primary,
+            launch_args: vec![],
             provider: crate::agent::Provider::Claude,
             parent: None,
             snapshot_at: None,
@@ -574,8 +991,15 @@ mod tests {
                 Request::ResumePicker => vec!["--resume"],
                 Request::Fork { .. } | Request::Prompt(_) => unreachable!(),
             };
-            expected.push("--settings");
-            assert_eq!(spec.args[..spec.args.len() - 1], expected);
+            expected.push("--mcp-config");
+            assert_eq!(spec.args[..spec.args.len() - 3], expected);
+            let mcp: serde_json::Value =
+                serde_json::from_str(&spec.args[spec.args.len() - 3]).unwrap();
+            assert_eq!(
+                mcp["mcpServers"]["tervy_local"]["args"],
+                serde_json::json!(["mcp"])
+            );
+            assert_eq!(spec.args[spec.args.len() - 2], "--settings");
             let settings: serde_json::Value =
                 serde_json::from_str(spec.args.last().unwrap()).unwrap();
             assert_eq!(settings["hooks"].as_object().unwrap().len(), 10);
@@ -663,12 +1087,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            &spec.args[4..],
+            &spec.args[6..],
             [
                 "--restricted",
                 "--strict-mcp-config",
-                "--tools=Read,Grep,Glob",
-                "--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,mcp__*,ShareOnboardingGuide",
+                "--tools=Read,Grep,Glob,mcp__tervy_local__list_prompts,mcp__tervy_local__read_prompt",
+                "--disallowedTools=Edit,Write,NotebookEdit,Bash,Agent,WebFetch,WebSearch,ShareOnboardingGuide",
                 "--disable-slash-commands",
                 "--permission-mode=dontAsk"
             ]
@@ -696,10 +1120,8 @@ mod tests {
             "--resume".to_string(),
             "30000000-0000-4000-8000-000000000003".into(),
             "--fork-session".into(),
-            "--settings".into(),
-            spec.args[3].clone(),
         ];
-        expected.extend(spec.args[4..].iter().cloned());
+        expected.extend(spec.args[2..].iter().cloned());
         expected.push(format!("{OBSERVER_PREAMBLE}\n\nQuestion: Why this design?"));
         assert_eq!(fork.args, expected);
         assert_eq!(fork.cwd, record.cwd);
@@ -725,9 +1147,11 @@ mod tests {
         old.as_object_mut().unwrap().remove("provider");
         old.as_object_mut().unwrap().remove("parent");
         old.as_object_mut().unwrap().remove("snapshot_at");
+        old.as_object_mut().unwrap().remove("launch_args");
         let old: Record = serde_json::from_value(old).unwrap();
         assert!(old.parent.is_none() && old.snapshot_at.is_none());
         assert_eq!(old.provider, Provider::Claude);
+        assert!(old.launch_args.is_empty());
         std::fs::remove_dir_all(folder).unwrap();
     }
     #[test]

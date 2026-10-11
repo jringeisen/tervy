@@ -7,6 +7,8 @@ pub struct Layout {
     /// Logical pixels; optional for layouts written before sidebar resizing.
     #[serde(default)]
     pub sidebar_width: Option<f32>,
+    #[serde(default)]
+    pub sidebar_collapsed: bool,
     pub active_project: Option<String>,
     pub tabs: Vec<Tab>,
     pub selected: Vec<String>,
@@ -38,7 +40,9 @@ mod tests {
         let old = r#"{"active_project":null,"tabs":[],"selected":[],"expanded":[]}"#;
         let mut layout: Layout = serde_json::from_str(old).unwrap();
         assert_eq!(layout.sidebar_width, None);
+        assert!(!layout.sidebar_collapsed);
         layout.sidebar_width = Some(340.);
+        layout.sidebar_collapsed = true;
         let saved = serde_json::to_string(&layout).unwrap();
         assert_eq!(serde_json::from_str::<Layout>(&saved).unwrap(), layout);
     }

@@ -15,7 +15,7 @@ fn warm(cx: &App) -> bool {
     cx.try_global::<Preference>()
         .is_some_and(|p| p.0 == "warm-dark")
 }
-use gpui_kit::{App, Window, rgb};
+use gpui_kit::{App, Window, px, rgb};
 
 /// Appearance changes reload the component theme, so apply our workspace colors
 /// after each reload. Theme::update also updates semantic tokens and the base
@@ -52,15 +52,15 @@ pub(crate) fn apply_palette(cx: &mut App) {
     Theme::update(cx, |theme| {
         let (surface, raised, hover, selected, border, foreground, muted) = if warm {
             (
-                0x282420, 0x332e29, 0x403930, 0x514634, 0x50473e, 0xebdbb2, 0xbdae93,
+                0x282420, 0x302c28, 0x39342f, 0x303f50, 0x49433d, 0xeee8de, 0xb8aea1,
             )
         } else if theme.is_dark() {
             (
-                0x212734, 0x292f3c, 0x343b49, 0x3b424f, 0x3e4654, 0xe6e6e6, 0xa4adba,
+                0x212734, 0x282e39, 0x303743, 0x2c4059, 0x3b4350, 0xe9edf3, 0xa9b2c0,
             )
         } else {
             (
-                0xf8f9fb, 0xf0f2f6, 0xe8ecf2, 0xdce5ef, 0xd4dbe4, 0x29313d, 0x667383,
+                0xf8f9fb, 0xf0f2f5, 0xe8ebf0, 0xe2ecfa, 0xd9dee6, 0x252c38, 0x5f6b7b,
             )
         };
         let surface = rgb(surface).into();
@@ -71,6 +71,22 @@ pub(crate) fn apply_palette(cx: &mut App) {
         let foreground = rgb(foreground).into();
         let muted = rgb(muted).into();
 
+        let primary = rgb(if theme.is_dark() { 0x366dcc } else { 0x245db5 }).into();
+        let primary_hover = rgb(if theme.is_dark() { 0x4179dc } else { 0x1e52a2 }).into();
+        let primary_active = rgb(if theme.is_dark() { 0x2c5fba } else { 0x19488e }).into();
+        theme.radius = px(6.);
+        theme.radius_lg = px(8.);
+        theme.shadow = false;
+        theme.focus_ring = true;
+        theme.primary = primary;
+        theme.primary_hover = primary_hover;
+        theme.primary_active = primary_active;
+        theme.primary_foreground = rgb(0xffffff).into();
+        theme.button_primary = primary;
+        theme.button_primary_hover = primary_hover;
+        theme.button_primary_active = primary_active;
+        theme.button_primary_foreground = rgb(0xffffff).into();
+        theme.ring = rgb(if theme.is_dark() { 0x8ab4ff } else { 0x245db5 }).into();
         theme.background = surface;
         theme.foreground = foreground;
         theme.border = border;
@@ -78,7 +94,7 @@ pub(crate) fn apply_palette(cx: &mut App) {
         theme.accent_foreground = foreground;
         theme.muted = raised;
         theme.muted_foreground = muted;
-        theme.sidebar = surface;
+        theme.sidebar = raised;
         theme.sidebar_foreground = foreground;
         theme.sidebar_border = border;
         theme.sidebar_accent = selected;
@@ -88,7 +104,7 @@ pub(crate) fn apply_palette(cx: &mut App) {
         theme.tab_foreground = muted;
         theme.tab_active = raised;
         theme.tab_active_foreground = foreground;
-        theme.popover = raised;
+        theme.popover = surface;
         theme.popover_foreground = foreground;
         theme.colors.list = raised;
         theme.list_hover = hover;

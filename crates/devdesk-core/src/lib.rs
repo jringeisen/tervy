@@ -15,9 +15,12 @@ pub mod agent;
 pub mod hook;
 pub mod ipc;
 pub mod layout;
+pub mod mcp;
 
 pub mod codex;
 
+pub mod meetings;
 pub mod perf;
+pub mod prompts;
 
 pub mod customization;

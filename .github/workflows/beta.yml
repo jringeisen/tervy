@@ -1,0 +1,25 @@
+name: Build Mac beta
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mac-beta:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install Rust tooling
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal --component rustfmt --component clippy
+          rustup default 1.99.0
+          cargo install cargo-deny --version 0.20.2 --locked
+      - name: Build local review disk image
+        run: scripts/release.sh --local
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Tervy-macos-arm64-local-beta
+          path: target/releases/*
+          if-no-files-found: error

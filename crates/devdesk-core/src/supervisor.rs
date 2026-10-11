@@ -5,7 +5,7 @@ use crate::config::{self, Config};
 use crate::env::ShellEnvironment;
 use crate::{
     agent::{self, AgentProvider},
-    ipc, layout,
+    ipc, layout, mcp, meetings, prompts,
 };
 use crate::{
     process,
@@ -47,10 +47,49 @@ pub struct SessionInfo {
 }
 
 pub enum Command {
+    ListMeetings,
+    StartMeeting,
+    StopMeeting,
+    RetryMeeting(String),
+    OpenMeetingAudio {
+        id: String,
+        microphone: bool,
+    },
+    SaveMeetingNotes {
+        id: String,
+        notes: String,
+    },
+    RenameMeeting {
+        id: String,
+        title: String,
+    },
+    DeleteMeetingAudio(String),
+    DeleteMeeting(String),
+    ListPrompts {
+        query: String,
+        limit: usize,
+        offset: usize,
+    },
+    ReadPrompt(String),
+    WritePrompt(prompts::Write),
+    DeletePrompt {
+        id: String,
+        revision: i64,
+    },
+    ResolvePromptDelete {
+        request_id: u64,
+        approved: bool,
+    },
     NewAgent {
         project: String,
         picker: bool,
         provider: agent::Provider,
+    },
+    NewAgentWithArgs {
+        project: String,
+        picker: bool,
+        provider: agent::Provider,
+        args: Vec<String>,
     },
     Customize {
         project: String,
@@ -61,6 +100,7 @@ pub enum Command {
     ApplyCustomization(String),
     UndoCustomization,
     ResumeAgent(SessionId),
+    ResumeAgentWithArgs(SessionId, Vec<String>),
     ForkAgent {
         parent: SessionId,
         question: String,
@@ -124,6 +164,30 @@ pub enum Command {
     Shutdown,
 }
 pub enum CoreEvent {
+    MeetingsListed(Vec<meetings::Meeting>),
+    MeetingUpdated(meetings::Meeting),
+    MeetingDeleted(String),
+    MeetingError(String),
+    PromptsListed {
+        query: String,
+        offset: usize,
+        items: Vec<prompts::Summary>,
+    },
+    PromptRead {
+        id: String,
+        prompt: Option<prompts::Prompt>,
+    },
+    PromptSaved {
+        prompt: prompts::Prompt,
+        from_ui: bool,
+    },
+    PromptDeleted(String),
+    PromptDeleteApproval {
+        request_id: u64,
+        title: String,
+        agent: String,
+    },
+    PromptError(String),
     /// Approximate physical footprint of the session process tree, in bytes.
     /// Launch identity prevents delayed samples from attaching to a restart.
     MemoryUsage(Vec<(SessionId, LaunchId, Option<u64>)>),
@@ -229,6 +293,11 @@ impl Drop for Supervisor {
 }
 
 enum Message {
+    Meeting {
+        id: String,
+        update: meetings::Update,
+    },
+    Mcp(mcp::Request),
     MemorySampled(Vec<(SessionId, LaunchId, Option<u64>)>),
     HooksReady,
     Reaped {
@@ -341,6 +410,10 @@ struct Entry {
     exited: bool,
 }
 struct Actor {
+    meeting_stop: Option<(String, mpsc::Sender<()>)>,
+    mcp: Option<mcp::Server>,
+    pending_prompt_deletes: BTreeMap<u64, (mcp::Request, Duration)>,
+    next_prompt_delete: u64,
     memory_due: Option<Duration>,
     memory_sampling: bool,
     // Removal is permanent metadata deletion; close alone only dismisses a tab.
@@ -378,6 +451,10 @@ impl Actor {
         events: async_channel::Sender<CoreEvent>,
     ) -> Self {
         Self {
+            meeting_stop: None,
+            mcp: None,
+            pending_prompt_deletes: BTreeMap::new(),
+            next_prompt_delete: 1,
             memory_due: None,
             memory_sampling: false,
             helper: None,
@@ -466,6 +543,8 @@ impl Actor {
                         }
                     }
                     self.store = Some(store);
+                    self.list_prompts(String::new(), 100, 0);
+                    self.recover_meetings();
                 }
                 Err(error) => self.emit(CoreEvent::ConfigError(format!(
                     "Session ledger unavailable: {error}"
@@ -485,6 +564,17 @@ impl Actor {
                 Err(error) => self.emit(CoreEvent::ConfigError(format!(
                     "Hook server unavailable: {error}"
                 ))),
+            }
+            if let Some(hook) = &self.hooks {
+                let sender = self.sender.clone();
+                match mcp::Server::bind(hook.path.with_file_name("mcp.sock"), move |request| {
+                    let _ = sender.send(Message::Mcp(request));
+                }) {
+                    Ok(server) => self.mcp = Some(server),
+                    Err(error) => self.emit(CoreEvent::ConfigError(format!(
+                        "MCP bridge unavailable: {error}"
+                    ))),
+                }
             }
             if self.recovery_pending && !self.orphans.is_empty() {
                 self.emit(CoreEvent::Orphans(self.orphans.clone()));
@@ -549,6 +639,7 @@ impl Actor {
                 .chain(self.orphan_check_at)
                 .chain(self.config_due)
                 .chain(self.layout_due)
+                .chain(self.pending_prompt_deletes.values().map(|(_, due)| *due))
                 .chain(self.shutdown_deadline)
                 .min();
             let message = match next {
@@ -570,6 +661,7 @@ impl Actor {
             if self.shutdown_deadline.is_some()
                 && self.entries.is_empty()
                 && self.orphan_check_at.is_none()
+                && self.meeting_stop.is_none()
             {
                 self.flush_layout();
                 self.emit(CoreEvent::ShutdownComplete { clean: true });
@@ -591,6 +683,8 @@ impl Actor {
     }
     fn message(&mut self, message: Message) {
         match message {
+            Message::Meeting { id, update } => self.meeting_update(id, update),
+            Message::Mcp(request) => self.mcp_request(request),
             Message::MemorySampled(samples) => {
                 self.memory_sampling = false;
                 self.memory_due = Some(self.clock.now() + Duration::from_secs(5));
@@ -702,6 +796,11 @@ impl Actor {
                                     runtime.input(true, self.clock.now());
                                 }
                             }
+                        }
+                        if let Some(runtime) = &mut entry.agent
+                            && !runtime.info.record.provider.tracks_sessions()
+                        {
+                            runtime.info.status = agent::Status::Running;
                         }
                         entry.info.agent = entry.agent.as_ref().map(|runtime| runtime.info.clone());
                         self.arm_codex_scan();
@@ -834,17 +933,96 @@ impl Actor {
             return;
         }
         match command {
+            Command::ListMeetings => self.list_meetings(),
+            Command::StartMeeting => self.start_meeting(),
+            Command::StopMeeting => self.stop_meeting(),
+            Command::RetryMeeting(id) => self.retry_meeting(id),
+            Command::OpenMeetingAudio { id, microphone } => self.open_meeting_audio(id, microphone),
+            Command::SaveMeetingNotes { id, notes } => self.edit_meeting(id, |meeting| {
+                if notes.len() > 512 * 1024 {
+                    return Err("Notes exceed 512 KB".into());
+                }
+                meeting.notes = notes;
+                Ok(())
+            }),
+            Command::RenameMeeting { id, title } => self.edit_meeting(id, |meeting| {
+                let title = title.trim();
+                if title.is_empty() || title.len() > 160 {
+                    return Err("Meeting title must be 1–160 bytes".into());
+                }
+                meeting.title = title.into();
+                Ok(())
+            }),
+            Command::DeleteMeetingAudio(id) => self.delete_meeting_audio(id),
+            Command::DeleteMeeting(id) => self.delete_meeting(id),
+            Command::ListPrompts {
+                query,
+                limit,
+                offset,
+            } => self.list_prompts(query, limit, offset),
+            Command::ReadPrompt(id) => {
+                match self
+                    .store
+                    .as_ref()
+                    .ok_or("Prompt store unavailable".to_string())
+                    .and_then(|store| store.read_prompt(&id))
+                {
+                    Ok(prompt) => self.emit(CoreEvent::PromptRead { id, prompt }),
+                    Err(error) => self.emit(CoreEvent::PromptError(error)),
+                }
+            }
+            Command::WritePrompt(write) => {
+                match self
+                    .store
+                    .as_ref()
+                    .ok_or("Prompt store unavailable".to_string())
+                    .and_then(|store| store.write_prompt(&write))
+                {
+                    Ok(prompt) => {
+                        self.emit(CoreEvent::PromptSaved {
+                            prompt,
+                            from_ui: true,
+                        });
+                        self.list_prompts(String::new(), 100, 0);
+                    }
+                    Err(error) => self.emit(CoreEvent::PromptError(error)),
+                }
+            }
+            Command::DeletePrompt { id, revision } => {
+                match self
+                    .store
+                    .as_ref()
+                    .ok_or("Prompt store unavailable".to_string())
+                    .and_then(|store| store.delete_prompt(&id, revision))
+                {
+                    Ok(()) => {
+                        self.emit(CoreEvent::PromptDeleted(id));
+                        self.list_prompts(String::new(), 100, 0);
+                    }
+                    Err(error) => self.emit(CoreEvent::PromptError(error)),
+                }
+            }
+            Command::ResolvePromptDelete {
+                request_id,
+                approved,
+            } => self.resolve_prompt_delete(request_id, approved),
             Command::NewAgent {
                 project,
                 picker,
                 provider,
-            } => self.new_agent(project, picker, provider, None),
+            } => self.new_agent(project, picker, provider, None, vec![]),
+            Command::NewAgentWithArgs {
+                project,
+                picker,
+                provider,
+                args,
+            } => self.new_agent(project, picker, provider, None, args),
             Command::Customize {
                 project,
                 provider,
                 request,
             } => {
-                self.new_agent(project, false, provider, Some(request));
+                self.new_agent(project, false, provider, Some(request), vec![]);
             }
             Command::ReviewCustomization => match crate::customization::Draft::review(&self.path) {
                 Ok(proposal) => self.emit(CoreEvent::CustomizationPreview(proposal)),
@@ -899,7 +1077,8 @@ impl Actor {
                 session_id,
             } => self.agent_exit_summary(id, launch, session_id),
             Command::ForkAgent { parent, question } => self.fork_agent(parent, question),
-            Command::ResumeAgent(id) => self.resume_agent(id),
+            Command::ResumeAgent(id) => self.resume_agent(id, None),
+            Command::ResumeAgentWithArgs(id, args) => self.resume_agent(id, Some(args)),
             Command::RemoveSession(id) => self.remove_session(id),
             Command::RemoveProject(project) => self.remove_project(project),
             Command::SaveLayout(mut layout) => {
@@ -1082,7 +1261,7 @@ impl Actor {
                     .get(&id)
                     .is_some_and(|entry| entry.agent.is_some())
                 {
-                    self.resume_agent(id);
+                    self.resume_agent(id, None);
                     return;
                 }
                 if self.entries.get(&id).is_some_and(|entry| {
@@ -1098,6 +1277,9 @@ impl Actor {
             }
             Command::Shutdown => {
                 if self.shutdown_deadline.is_none() {
+                    if let Some((_, stop)) = &self.meeting_stop {
+                        let _ = stop.send(());
+                    }
                     self.shutdown_deadline = Some(self.clock.now() + Duration::from_secs(15));
                     let ids: Vec<_> = self.entries.keys().copied().collect();
                     for id in ids {
@@ -1110,6 +1292,542 @@ impl Actor {
             }
         }
     }
+    fn list_prompts(&self, query: String, limit: usize, offset: usize) {
+        match self
+            .store
+            .as_ref()
+            .ok_or("Prompt store unavailable".to_string())
+            .and_then(|store| store.list_prompts(&query, limit, offset))
+        {
+            Ok(items) => self.emit(CoreEvent::PromptsListed {
+                query,
+                offset,
+                items,
+            }),
+            Err(error) => self.emit(CoreEvent::PromptError(error)),
+        }
+    }
+
+    fn list_meetings(&self) {
+        match self
+            .store
+            .as_ref()
+            .ok_or("Meeting store unavailable".to_string())
+            .and_then(Store::meetings)
+        {
+            Ok(meetings) => self.emit(CoreEvent::MeetingsListed(meetings)),
+            Err(error) => self.emit(CoreEvent::MeetingError(error)),
+        }
+    }
+
+    fn recover_meetings(&mut self) {
+        let Some(store) = &self.store else { return };
+        let Ok(meetings) = store.meetings() else {
+            return;
+        };
+        for mut meeting in meetings {
+            if matches!(
+                meeting.status,
+                meetings::Status::Starting
+                    | meetings::Status::Recording
+                    | meetings::Status::Stopping
+                    | meetings::Status::Transcribing
+                    | meetings::Status::GeneratingNotes
+            ) {
+                meeting.status = meetings::Status::NeedsAttention;
+                meeting.error =
+                    Some("Interrupted. Retry processing if the audio file is present.".into());
+                let _ = store.save_meeting(&mut meeting);
+            }
+        }
+        self.list_meetings();
+    }
+
+    fn start_meeting(&mut self) {
+        if self.meeting_stop.is_some() {
+            self.emit(CoreEvent::MeetingError(
+                "A meeting is already recording".into(),
+            ));
+            return;
+        }
+        let result = (|| {
+            let helper = meetings::helper_path()?;
+            let root = self
+                .path
+                .parent()
+                .ok_or("Config folder unavailable")?
+                .join("meetings");
+            let mut meeting = meetings::Meeting::new(root);
+            let audio = meeting
+                .audio_path
+                .clone()
+                .ok_or("Recording path unavailable")?;
+            let microphone = meeting
+                .microphone_path
+                .clone()
+                .ok_or("Microphone path unavailable")?;
+            let folder = audio.parent().ok_or("Recording folder unavailable")?;
+            std::fs::create_dir_all(folder).map_err(|e| e.to_string())?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(folder, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| e.to_string())?;
+            self.store
+                .as_ref()
+                .ok_or("Meeting store unavailable")?
+                .save_meeting(&mut meeting)?;
+            let id = meeting.id.clone();
+            let sender = self.sender.clone();
+            let stop = meetings::start_recording(audio, microphone, helper, move |update| {
+                let _ = sender.send(Message::Meeting {
+                    id: id.clone(),
+                    update,
+                });
+            });
+            self.meeting_stop = Some((meeting.id.clone(), stop));
+            self.emit(CoreEvent::MeetingUpdated(meeting));
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.emit(CoreEvent::MeetingError(error));
+        }
+    }
+
+    fn stop_meeting(&mut self) {
+        let Some((id, stop)) = &self.meeting_stop else {
+            return;
+        };
+        let id = id.clone();
+        let _ = stop.send(());
+        self.edit_meeting(id, |meeting| {
+            if matches!(
+                meeting.status,
+                meetings::Status::Starting | meetings::Status::Recording
+            ) {
+                meeting.status = meetings::Status::Stopping;
+            }
+            Ok(())
+        });
+    }
+
+    fn meeting_update(&mut self, id: String, update: meetings::Update) {
+        let result = (|| {
+            let store = self.store.as_ref().ok_or("Meeting store unavailable")?;
+            let mut meeting = store.meeting(&id)?.ok_or("Meeting no longer exists")?;
+            match update {
+                meetings::Update::Recording if meeting.status != meetings::Status::Stopping => {
+                    meeting.status = meetings::Status::Recording
+                }
+                meetings::Update::Recording => {}
+                meetings::Update::Stopped(duration) => {
+                    meeting.duration_secs = duration;
+                    meeting.status = meetings::Status::Transcribing;
+                    if meeting
+                        .audio_path
+                        .as_ref()
+                        .is_some_and(|path| !path.is_file())
+                    {
+                        meeting.audio_path = None;
+                    }
+                    if meeting
+                        .microphone_path
+                        .as_ref()
+                        .is_some_and(|path| !path.is_file())
+                    {
+                        meeting.microphone_path = None;
+                    }
+                    if self
+                        .meeting_stop
+                        .as_ref()
+                        .is_some_and(|(active, _)| active == &id)
+                    {
+                        self.meeting_stop = None;
+                    }
+                }
+                meetings::Update::Transcribing => meeting.status = meetings::Status::Transcribing,
+                meetings::Update::Transcript(text) => meeting.transcript = text,
+                meetings::Update::GeneratingNotes => {
+                    meeting.status = meetings::Status::GeneratingNotes
+                }
+                meetings::Update::Notes(text) => {
+                    meeting.notes = text;
+                    meeting.status = meetings::Status::Ready;
+                    meeting.error = None;
+                }
+                meetings::Update::Error(error) => {
+                    meeting.status = meetings::Status::NeedsAttention;
+                    meeting.error = Some(error);
+                    if self
+                        .meeting_stop
+                        .as_ref()
+                        .is_some_and(|(active, _)| active == &id)
+                    {
+                        self.meeting_stop = None;
+                    }
+                }
+            }
+            store.save_meeting(&mut meeting)?;
+            self.emit(CoreEvent::MeetingUpdated(meeting));
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.emit(CoreEvent::MeetingError(error));
+        }
+    }
+
+    fn retry_meeting(&mut self, id: String) {
+        let result = (|| {
+            let store = self.store.as_ref().ok_or("Meeting store unavailable")?;
+            let mut meeting = store.meeting(&id)?.ok_or("Meeting no longer exists")?;
+            if !matches!(
+                meeting.status,
+                meetings::Status::Ready | meetings::Status::NeedsAttention
+            ) {
+                return Err("Wait for the meeting to finish processing".into());
+            }
+            let audio = meeting
+                .audio_path
+                .clone()
+                .or_else(|| {
+                    meeting
+                        .microphone_path
+                        .as_ref()
+                        .map(|path| path.with_file_name("system.caf"))
+                })
+                .ok_or("This meeting has no audio to process")?;
+            let microphone = meeting
+                .microphone_path
+                .clone()
+                .unwrap_or_else(|| audio.with_file_name("microphone.caf"));
+            if !audio.is_file() && !microphone.is_file() {
+                return Err("This meeting has no audio to process".into());
+            }
+            let helper = meetings::helper_path()?;
+            meeting.status = meetings::Status::Transcribing;
+            meeting.error = None;
+            store.save_meeting(&mut meeting)?;
+            self.emit(CoreEvent::MeetingUpdated(meeting));
+            let sender = self.sender.clone();
+            meetings::retry(audio, microphone, helper, move |update| {
+                let _ = sender.send(Message::Meeting {
+                    id: id.clone(),
+                    update,
+                });
+            });
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.emit(CoreEvent::MeetingError(error));
+        }
+    }
+
+    fn edit_meeting(
+        &mut self,
+        id: String,
+        edit: impl FnOnce(&mut meetings::Meeting) -> Result<(), String>,
+    ) {
+        let result = (|| {
+            let store = self.store.as_ref().ok_or("Meeting store unavailable")?;
+            let mut meeting = store.meeting(&id)?.ok_or("Meeting no longer exists")?;
+            edit(&mut meeting)?;
+            store.save_meeting(&mut meeting)?;
+            self.emit(CoreEvent::MeetingUpdated(meeting));
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.emit(CoreEvent::MeetingError(error));
+        }
+    }
+
+    fn delete_meeting_audio(&mut self, id: String) {
+        self.edit_meeting(id, |meeting| {
+            if !matches!(
+                meeting.status,
+                meetings::Status::Ready | meetings::Status::NeedsAttention
+            ) {
+                return Err("Wait for processing to finish before deleting audio".into());
+            }
+            if let Some(path) = &meeting.audio_path
+                && path.exists()
+            {
+                std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            }
+            if let Some(path) = &meeting.microphone_path
+                && path.exists()
+            {
+                std::fs::remove_file(path).map_err(|e| e.to_string())?;
+            }
+            meeting.audio_path = None;
+            meeting.microphone_path = None;
+            Ok(())
+        });
+    }
+
+    fn open_meeting_audio(&self, id: String, microphone: bool) {
+        let result = (|| {
+            let meeting = self
+                .store
+                .as_ref()
+                .ok_or("Meeting store unavailable")?
+                .meeting(&id)?
+                .ok_or("Meeting no longer exists")?;
+            let path = (if microphone {
+                meeting.microphone_path
+            } else {
+                meeting.audio_path
+            })
+            .filter(|path| path.is_file())
+            .ok_or("This meeting has no audio for that source")?;
+            std::process::Command::new("/usr/bin/open")
+                .arg(path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.emit(CoreEvent::MeetingError(error));
+        }
+    }
+
+    fn delete_meeting(&mut self, id: String) {
+        let result = (|| {
+            if self
+                .meeting_stop
+                .as_ref()
+                .is_some_and(|(active, _)| active == &id)
+            {
+                return Err("Stop recording before deleting the meeting".into());
+            }
+            let store = self.store.as_ref().ok_or("Meeting store unavailable")?;
+            let meeting = store.meeting(&id)?.ok_or("Meeting no longer exists")?;
+            if !matches!(
+                meeting.status,
+                meetings::Status::Ready | meetings::Status::NeedsAttention
+            ) {
+                return Err("Wait for processing to finish before deleting the meeting".into());
+            }
+            let id = uuid::Uuid::parse_str(&id)
+                .map_err(|e| e.to_string())?
+                .to_string();
+            let folder = self
+                .path
+                .parent()
+                .ok_or("Config folder unavailable")?
+                .join("meetings")
+                .join(&id);
+            if folder.is_dir() {
+                std::fs::remove_dir_all(&folder).map_err(|e| e.to_string())?;
+            }
+            store.delete_meeting(&id)?;
+            self.emit(CoreEvent::MeetingDeleted(id));
+            Ok::<(), String>(())
+        })();
+        if let Err(error) = result {
+            self.emit(CoreEvent::MeetingError(error));
+        }
+    }
+
+    fn mcp_request(&mut self, request: mcp::Request) {
+        let authorized = self.entries.iter().find_map(|(id, entry)| {
+            let runtime = entry.agent.as_ref()?;
+            (runtime.info.record.id == request.envelope.agent_id
+                && entry.info.launch.0 == request.envelope.launch
+                && runtime.token == request.envelope.token
+                && entry.info.status == SessionStatus::Running
+                && entry.stopping.is_none()
+                && !entry.exited
+                && !self.removing.contains(id))
+            .then(|| {
+                (
+                    runtime.info.record.role.clone(),
+                    runtime.info.record.name.clone(),
+                )
+            })
+        });
+        let Some((role, agent_name)) = authorized else {
+            let _ = request.reply.send(mcp::Reply {
+                result: None,
+                error: Some("Agent session is no longer authorized".into()),
+            });
+            return;
+        };
+        let write = matches!(
+            request.envelope.operation,
+            mcp::Operation::Write { .. }
+                | mcp::Operation::Delete { .. }
+                | mcp::Operation::EditMeeting { .. }
+        );
+        if write && role != agent::Role::Primary {
+            let _ = request.reply.send(mcp::Reply {
+                result: None,
+                error: Some("Read-only agents cannot change library content".into()),
+            });
+            return;
+        }
+        let Some(store) = &self.store else {
+            let _ = request.reply.send(mcp::Reply {
+                result: None,
+                error: Some("Library store unavailable".into()),
+            });
+            return;
+        };
+        if let mcp::Operation::Delete { ref id, revision } = request.envelope.operation {
+            let result = prompts::validate_delete(id, revision)
+                .and_then(|()| store.read_prompt(id)?.ok_or("Prompt not found".into()))
+                .and_then(|prompt| {
+                    if prompt.revision != revision {
+                        Err("Prompt changed; reload before deleting".into())
+                    } else {
+                        Ok(prompt)
+                    }
+                });
+            match result {
+                Ok(prompt) => {
+                    let request_id = self.next_prompt_delete;
+                    self.next_prompt_delete += 1;
+                    self.pending_prompt_deletes.insert(
+                        request_id,
+                        (request, self.clock.now() + Duration::from_secs(90)),
+                    );
+                    self.emit(CoreEvent::PromptDeleteApproval {
+                        request_id,
+                        title: prompt.title,
+                        agent: agent_name,
+                    });
+                }
+                Err(error) => {
+                    let _ = request.reply.send(mcp::Reply {
+                        result: None,
+                        error: Some(error),
+                    });
+                }
+            }
+            return;
+        }
+        let result: Result<serde_json::Value, String> = match &request.envelope.operation {
+            mcp::Operation::List {
+                query,
+                limit,
+                offset,
+            } => store
+                .list_prompts(query, *limit, *offset)
+                .and_then(|items| serde_json::to_value(items).map_err(|e| e.to_string())),
+            mcp::Operation::Read { id } => store
+                .read_prompt(id)
+                .and_then(|prompt| prompt.ok_or("Prompt not found".into()))
+                .and_then(|prompt| serde_json::to_value(prompt).map_err(|e| e.to_string())),
+            mcp::Operation::Write { write } => store.write_prompt(write).and_then(|prompt| {
+                self.emit(CoreEvent::PromptSaved {
+                    prompt: prompt.clone(),
+                    from_ui: false,
+                });
+                serde_json::to_value(prompt).map_err(|e| e.to_string())
+            }),
+            mcp::Operation::ListMeetings {
+                query,
+                limit,
+                offset,
+            } => store.meetings().map(|meetings| {
+                let query = query.trim().to_lowercase();
+                let items: Vec<_> = meetings
+                    .iter()
+                    .filter(|meeting| {
+                        query.is_empty()
+                            || meeting.title.to_lowercase().contains(&query)
+                            || meeting.notes.to_lowercase().contains(&query)
+                    })
+                    .skip((*offset).min(100_000))
+                    .take((*limit).clamp(1, 100))
+                    .map(mcp::meeting_summary)
+                    .collect();
+                serde_json::json!(items)
+            }),
+            mcp::Operation::ReadMeeting { id } => store
+                .meeting(id)
+                .and_then(|meeting| meeting.ok_or("Meeting not found".into()))
+                .and_then(|meeting| {
+                    if meeting.notes.len() > mcp::MAX_MCP_NOTES {
+                        Err("Meeting notes exceed the MCP read limit of 128 KiB".into())
+                    } else {
+                        Ok(mcp::meeting_detail(&meeting))
+                    }
+                }),
+            mcp::Operation::EditMeeting { edit } => edit.validate().and_then(|()| {
+                let mut meeting = store
+                    .meeting(&edit.id)?
+                    .ok_or("Meeting not found".to_string())?;
+                if meeting.revision != edit.expected_revision {
+                    return Err("Meeting changed; read_meeting again before editing".into());
+                }
+                if edit.notes.is_some()
+                    && !matches!(
+                        meeting.status,
+                        meetings::Status::Ready | meetings::Status::NeedsAttention
+                    )
+                {
+                    return Err("Wait for meeting processing to finish before editing notes".into());
+                }
+                if let Some(title) = &edit.title {
+                    meeting.title = title.trim().to_string();
+                }
+                if let Some(notes) = &edit.notes {
+                    meeting.notes = notes.clone();
+                }
+                store.save_meeting(&mut meeting)?;
+                self.emit(CoreEvent::MeetingUpdated(meeting.clone()));
+                Ok(mcp::meeting_detail(&meeting))
+            }),
+            mcp::Operation::Delete { .. } => unreachable!(),
+        };
+        if result.is_ok() && matches!(request.envelope.operation, mcp::Operation::Write { .. }) {
+            self.list_prompts(String::new(), 100, 0);
+        }
+        let _ = request.reply.send(match result {
+            Ok(value) => mcp::Reply {
+                result: Some(value),
+                error: None,
+            },
+            Err(error) => mcp::Reply {
+                result: None,
+                error: Some(error),
+            },
+        });
+    }
+
+    fn resolve_prompt_delete(&mut self, request_id: u64, approved: bool) {
+        let Some((request, _)) = self.pending_prompt_deletes.remove(&request_id) else {
+            return;
+        };
+        if !approved {
+            let _ = request.reply.send(mcp::Reply {
+                result: None,
+                error: Some("User cancelled prompt deletion".into()),
+            });
+            return;
+        }
+        let mcp::Operation::Delete { id, revision } = request.envelope.operation else {
+            return;
+        };
+        let result = self
+            .store
+            .as_ref()
+            .ok_or("Prompt store unavailable".to_string())
+            .and_then(|store| store.delete_prompt(&id, revision));
+        if result.is_ok() {
+            self.emit(CoreEvent::PromptDeleted(id.clone()));
+            self.list_prompts(String::new(), 100, 0);
+        }
+        let _ = request.reply.send(match result {
+            Ok(()) => mcp::Reply {
+                result: Some(serde_json::json!({"deleted":id})),
+                error: None,
+            },
+            Err(error) => mcp::Reply {
+                result: None,
+                error: Some(error),
+            },
+        });
+    }
+
     /// Codex tool PTYs use their own SIDs. Capture live descendant sessions
     /// before killing the TUI, and journal each birth identity so a crash during
     /// escalation can recover it. No ancestry polling is needed while idle.
@@ -1404,6 +2122,8 @@ impl Actor {
                             agent::Provider::Codex => {
                                 crate::codex::CodexProvider.build_launch(&context, &environment)?
                             }
+                            provider => agent::InteractiveProvider(provider)
+                                .build_launch(&context, &environment)?,
                         }
                     } else if let Some(process_spec) = &process_spec {
                         process::launch(&project, process_spec, &environment, lines)
@@ -1650,7 +2370,14 @@ impl Actor {
         picker: bool,
         provider: agent::Provider,
         customization: Option<String>,
+        launch_args: Vec<String>,
     ) {
+        if !provider.tracks_sessions() && (picker || customization.is_some()) {
+            self.emit(CoreEvent::ConfigError(
+                "This agent supports interactive launch and restart only".into(),
+            ));
+            return;
+        }
         if self.recovery_pending || self.orphan_check_at.is_some() {
             self.emit(CoreEvent::ConfigError(
                 "Resolve previous sessions before launching an agent".into(),
@@ -1691,11 +2418,16 @@ impl Actor {
                 .unwrap_or_else(|| project.path.clone()),
             role: agent::Role::Primary,
             provider,
+            launch_args,
             parent: None,
             snapshot_at: None,
             session_id: (!picker && provider == agent::Provider::Claude)
                 .then(|| uuid::Uuid::new_v4().to_string()),
         };
+        if let Err(error) = agent::launch_args(&record) {
+            self.emit(CoreEvent::ConfigError(error));
+            return;
+        }
         let result = self
             .store
             .as_ref()
@@ -1744,6 +2476,12 @@ impl Actor {
             return;
         };
         let record = &parent.info.record;
+        if !record.provider.tracks_sessions() {
+            self.emit(CoreEvent::ConfigError(
+                "Side conversations are available for Claude and Codex agents".into(),
+            ));
+            return;
+        }
         if record.role != agent::Role::Primary
             || entry.info.status != SessionStatus::Running
             || parent.info.status == agent::Status::Launching
@@ -1766,6 +2504,7 @@ impl Actor {
             cwd: record.cwd.clone(),
             role: agent::Role::Side,
             provider: record.provider,
+            launch_args: vec![],
             session_id: None,
             parent: Some(record.id.clone()),
             snapshot_at: Some(
@@ -1795,7 +2534,7 @@ impl Actor {
         );
         self.spawn(id);
     }
-    fn resume_agent(&mut self, id: SessionId) {
+    fn resume_agent(&mut self, id: SessionId, args: Option<Vec<String>>) {
         if self.removing.contains(&id) {
             return;
         }
@@ -1832,7 +2571,30 @@ impl Actor {
             ));
             return;
         }
-        runtime.request = if runtime.info.record.session_id.is_some() {
+        if let Some(args) = args {
+            if runtime.info.record.role != agent::Role::Primary {
+                self.emit(CoreEvent::ConfigError(
+                    "Side conversation launch arguments cannot be customized".into(),
+                ));
+                return;
+            }
+            let mut record = runtime.info.record.clone();
+            record.launch_args = args;
+            let result = agent::launch_args(&record).and_then(|_| {
+                self.store
+                    .as_ref()
+                    .ok_or("Agent store unavailable".into())
+                    .and_then(|store| store.save_agent(&record))
+            });
+            if let Err(error) = result {
+                self.emit(CoreEvent::ConfigError(error));
+                return;
+            }
+            runtime.info.record = record;
+        }
+        runtime.request = if !runtime.info.record.provider.tracks_sessions() {
+            agent::Request::New
+        } else if runtime.info.record.session_id.is_some() {
             agent::Request::Resume
         } else {
             agent::Request::ResumePicker
@@ -2360,6 +3122,20 @@ impl Actor {
     fn timers(&mut self) {
         self.decay_agents();
         let now = self.clock.now();
+        let expired: Vec<_> = self
+            .pending_prompt_deletes
+            .iter()
+            .filter(|(_, (_, due))| *due <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in expired {
+            if let Some((request, _)) = self.pending_prompt_deletes.remove(&id) {
+                let _ = request.reply.send(mcp::Reply {
+                    result: None,
+                    error: Some("Prompt deletion confirmation timed out".into()),
+                });
+            }
+        }
         self.scan_codex_jobs(now);
         if self.layout_due.is_some_and(|deadline| now >= deadline) {
             self.flush_layout();
@@ -2475,6 +3251,179 @@ mod tests {
         }
     }
     #[test]
+    fn mcp_library_calls_require_live_launch_revision_and_primary_role_for_writes() {
+        let (sender, _) = mpsc::channel();
+        let (events, receiver) = async_channel::unbounded();
+        let mut actor = Actor::new(PathBuf::new(), None, sender, events);
+        actor.store = Some(Store::open(std::path::Path::new(":memory:")).unwrap());
+        let record = agent::Record {
+            id: uuid::Uuid::new_v4().to_string(),
+            project: "p".into(),
+            name: "Agent".into(),
+            cwd: PathBuf::from("/tmp"),
+            role: agent::Role::Primary,
+            launch_args: vec![],
+            provider: agent::Provider::Claude,
+            session_id: None,
+            parent: None,
+            snapshot_at: None,
+        };
+        let id = actor.agent_entry(record.clone(), agent::Request::New);
+        let entry = actor.entries.get_mut(&id).unwrap();
+        entry.info.launch = LaunchId(7);
+        entry.info.status = SessionStatus::Running;
+        entry.exited = false;
+        let token = entry.agent.as_ref().unwrap().token.clone();
+        let operation = mcp::Operation::Write {
+            write: prompts::Write {
+                id: None,
+                title: "Design".into(),
+                body: "Polished and minimal.".into(),
+                expected_revision: None,
+            },
+        };
+        let call = |actor: &mut Actor, launch, operation| {
+            let (reply, receive) = mpsc::sync_channel(1);
+            actor.mcp_request(mcp::Request {
+                envelope: mcp::Envelope {
+                    agent_id: record.id.clone(),
+                    launch,
+                    token: token.clone(),
+                    operation,
+                },
+                reply,
+            });
+            receive.try_recv().unwrap()
+        };
+        assert!(call(&mut actor, 6, operation.clone()).error.is_some());
+        let created = call(&mut actor, 7, operation.clone());
+        assert!(created.error.is_none());
+        let prompt: prompts::Prompt = serde_json::from_value(created.result.unwrap()).unwrap();
+        assert_eq!(
+            actor
+                .store
+                .as_ref()
+                .unwrap()
+                .read_prompt(&prompt.id)
+                .unwrap()
+                .unwrap()
+                .body,
+            "Polished and minimal."
+        );
+        let mut meeting = meetings::Meeting::new(PathBuf::from("/tmp/tervy-mcp-meeting"));
+        meeting.status = meetings::Status::Ready;
+        meeting.title = "Planning".into();
+        meeting.notes = "## Summary\n\nOriginal notes.".into();
+        meeting.transcript = "Private transcript".into();
+        actor
+            .store
+            .as_ref()
+            .unwrap()
+            .save_meeting(&mut meeting)
+            .unwrap();
+        let listed = call(
+            &mut actor,
+            7,
+            mcp::Operation::ListMeetings {
+                query: "original".into(),
+                limit: 10,
+                offset: 0,
+            },
+        );
+        let listed = listed.result.unwrap();
+        assert_eq!(listed[0]["id"], meeting.id);
+        assert!(listed[0].get("notes").is_none());
+        let read = call(
+            &mut actor,
+            7,
+            mcp::Operation::ReadMeeting {
+                id: meeting.id.clone(),
+            },
+        )
+        .result
+        .unwrap();
+        assert_eq!(read["notes"], meeting.notes);
+        assert!(read.get("transcript").is_none());
+        assert!(read.get("audio_path").is_none());
+        let edit = mcp::Operation::EditMeeting {
+            edit: mcp::MeetingEdit {
+                id: meeting.id.clone(),
+                expected_revision: meeting.revision,
+                title: Some("Planning review".into()),
+                notes: Some("## Decisions\n\nApproved.".into()),
+            },
+        };
+        assert!(call(&mut actor, 6, edit.clone()).error.is_some());
+        let edited = call(&mut actor, 7, edit.clone());
+        assert!(edited.error.is_none());
+        assert_eq!(edited.result.unwrap()["revision"], 2);
+        let saved_meeting = actor
+            .store
+            .as_ref()
+            .unwrap()
+            .meeting(&meeting.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved_meeting.title, "Planning review");
+        assert_eq!(saved_meeting.notes, "## Decisions\n\nApproved.");
+        assert!(call(&mut actor, 7, edit).error.unwrap().contains("changed"));
+        actor
+            .entries
+            .get_mut(&id)
+            .unwrap()
+            .agent
+            .as_mut()
+            .unwrap()
+            .info
+            .record
+            .role = agent::Role::Side;
+        assert!(
+            call(&mut actor, 7, operation)
+                .error
+                .unwrap()
+                .contains("Read-only")
+        );
+        assert!(
+            call(&mut actor, 7, mcp::Operation::Read { id: prompt.id })
+                .error
+                .is_none()
+        );
+        assert!(
+            call(
+                &mut actor,
+                7,
+                mcp::Operation::EditMeeting {
+                    edit: mcp::MeetingEdit {
+                        id: meeting.id.clone(),
+                        expected_revision: saved_meeting.revision,
+                        title: None,
+                        notes: Some("Should fail".into()),
+                    }
+                }
+            )
+            .error
+            .unwrap()
+            .contains("Read-only")
+        );
+        assert!(
+            call(
+                &mut actor,
+                7,
+                mcp::Operation::ReadMeeting { id: meeting.id }
+            )
+            .error
+            .is_none()
+        );
+        let mut saw_saved = false;
+        let mut saw_meeting = false;
+        while let Ok(event) = receiver.try_recv() {
+            saw_saved |= matches!(&event, CoreEvent::PromptSaved { from_ui: false, .. });
+            saw_meeting |= matches!(&event, CoreEvent::MeetingUpdated(_));
+        }
+        assert!(saw_saved);
+        assert!(saw_meeting);
+    }
+    #[test]
     fn a_side_cannot_adopt_its_parent_id_or_a_nonfork_session_start() {
         let parent = uuid::Uuid::new_v4().to_string();
         for (source, session_id) in [
@@ -2491,6 +3440,7 @@ mod tests {
                 name: "Side".into(),
                 cwd: PathBuf::from("/tmp"),
                 role: agent::Role::Side,
+                launch_args: vec![],
                 provider: crate::agent::Provider::Claude,
                 session_id: None,
                 parent: Some(uuid::Uuid::new_v4().to_string()),
@@ -2544,6 +3494,7 @@ mod tests {
             name: "Claude".into(),
             cwd: PathBuf::from("/tmp"),
             role: agent::Role::Primary,
+            launch_args: vec![],
             provider: crate::agent::Provider::Claude,
             parent: None,
             snapshot_at: None,
@@ -2741,6 +3692,7 @@ mod tests {
             name: "Codex".into(),
             cwd: PathBuf::from("/tmp"),
             role: agent::Role::Primary,
+            launch_args: vec![],
             provider: agent::Provider::Codex,
             parent: None,
             snapshot_at: None,

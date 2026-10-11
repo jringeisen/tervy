@@ -18,6 +18,7 @@ impl Workspace {
             name: "Synthetic parent".into(),
             cwd: std::env::temp_dir(),
             role: agent::Role::Primary,
+            launch_args: vec![],
             provider,
             session_id: Some("20000000-0000-4000-8000-000000000002".into()),
             parent: None,
@@ -31,6 +32,7 @@ impl Workspace {
                     id: "30000000-0000-4000-8000-000000000003".into(),
                     name: "Why this choice?".into(),
                     role: agent::Role::Side,
+                    launch_args: vec![],
                     provider,
                     parent: Some(primary.id.clone()),
                     snapshot_at: Some(1_791_518_400),
@@ -264,7 +266,7 @@ impl Workspace {
                 });
                 Theme::change(ThemeMode::Dark, Some(window), cx);
                 crate::theme::apply_palette(cx);
-                window.on_next_frame(move |_, cx| {
+                window.on_next_frame(move |window, cx| {
                     let _ = weak.update(cx, |this, cx| {
                         let expected = devdesk_term::snapshot::Palette::default();
                         assert_eq!(cx.theme().background, terminal_surface(&expected));
@@ -272,6 +274,32 @@ impl Workspace {
                             assert!(tab.view.read(cx).palette == expected);
                         }
                         eprintln!("devdesk-appearance-smoke PASS light_then_dark=true visible_and_hidden_terminal_palettes=true");
+                        this.narrow_window_smoke(window, cx);
+                    });
+                });
+            });
+        });
+        window.refresh();
+    }
+
+    fn narrow_window_smoke(&self, window: &mut Window, cx: &Context<Self>) {
+        let weak = cx.weak_entity();
+        window.on_next_frame(move |window, _cx| {
+            window.resize(size(px(560.), px(480.)));
+            window.on_next_frame(move |window, _cx| {
+                window.on_next_frame(move |window, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        let sidebar = this.sidebar_state.read(cx).sizes()[0];
+                        assert!(sidebar <= px(240.));
+                        assert!(!this.sidebar_has_memory_column(cx));
+                        let bounds = this.tabs[&this.active().unwrap()].view.read(cx).bounds;
+                        assert!(bounds.size.width >= px(300.), "narrow primary bounds: {bounds:?}");
+                        let side = this.side_panes[&this.active().unwrap()];
+                        let side_bounds = this.tabs[&side].view.read(cx).bounds;
+                        assert!(side_bounds.origin.y > bounds.origin.y);
+                        assert!(side_bounds.size.width >= px(300.));
+                        assert!(bounds.origin.x + bounds.size.width <= window.viewport_size().width);
+                        eprintln!("devdesk-narrow-smoke PASS viewport=560x480 sidebar_fits=true terminal_visible=true memory_in_tooltip=true");
                         cx.quit();
                     });
                 });

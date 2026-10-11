@@ -125,7 +125,7 @@ fn fixture(folder: &Path) {
     for flag in [
         "--restricted",
         "--strict-mcp-config",
-        "--tools=Read,Grep,Glob",
+        "--tools=Read,Grep,Glob,mcp__tervy_local__list_prompts,mcp__tervy_local__read_prompt",
         "--permission-mode=dontAsk",
     ] {
         assert!(argv.iter().any(|arg| arg == flag));
