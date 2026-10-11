@@ -44,3 +44,24 @@ jobs:
           codesign --verify --deep --strict --verbose=2 "$app"
           "$app/Contents/MacOS/devdesk" hook compatibility-smoke
           echo 'Tervy bundle and CLI entry point loaded on macOS 15 arm64.'
+      - name: Render a synthetic first frame on macOS 15
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, subprocess, time
+          executable = pathlib.Path(os.environ['RUNNER_TEMP']) / 'Tervy.app/Contents/MacOS/devdesk'
+          environment = dict(os.environ)
+          environment.update(
+              DEVDESK_HOME=str(pathlib.Path(os.environ['RUNNER_TEMP']) / 'tervy-smoke-state'),
+              DEVDESK_PERF_LAYOUT='terminal',
+              DEVDESK_PERF_EXIT='1',
+              DEVDESK_PERF_T0=str(time.time_ns()),
+          )
+          result = subprocess.run(
+              [str(executable)], env=environment, capture_output=True, text=True, timeout=45,
+              check=False,
+          )
+          timing = [line for line in result.stderr.splitlines() if line.startswith('devdesk-perf ')]
+          if result.returncode or not timing:
+              raise SystemExit(f'First-frame smoke failed (exit {result.returncode}): {result.stderr[-2000:]}')
+          print(timing[-1])
+          PY
