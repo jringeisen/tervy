@@ -195,7 +195,11 @@ impl OwnedSession {
     pub fn capture(pid: u32) -> io::Result<Self> {
         let leader = ProcessIdentity::read(pid as i32)?;
         // SAFETY: the child must be the session leader created by tty::new.
-        if unsafe { libc::getsid(leader.pid) } != leader.pid {
+        let sid = unsafe { libc::getsid(leader.pid) };
+        if sid < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if sid != leader.pid {
             return Err(io::Error::other("PTY child is not its session leader"));
         }
         Ok(Self { leader })

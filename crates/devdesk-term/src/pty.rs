@@ -82,6 +82,10 @@ impl TerminalSession {
         // Term lock or reader exists.
         // Reading, painting, input and teardown never acquire this mutex.
         static PTY_SPAWN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let spawned_after_us = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_micros() as u64;
         let pty = {
             let _creation = PTY_SPAWN
                 .lock()
@@ -90,7 +94,19 @@ impl TerminalSession {
         }
         .map_err(|error| io::Error::new(error.kind(), format!("Spawn PTY: {error}")))?;
         let pid = pty.child().id();
-        let owned = crate::kill::OwnedSession::capture(pid)?;
+        let owned = match crate::kill::OwnedSession::capture(pid) {
+            Ok(owned) => owned,
+            // A command can exit between spawn and proc_pidinfo. Retain its
+            // birth lower bound so its PTY output/exit can still be drained,
+            // and any surviving session members remain identity scoped.
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => crate::kill::OwnedSession {
+                leader: crate::kill::ProcessIdentity {
+                    pid: pid as i32,
+                    started_us: spawned_after_us,
+                },
+            },
+            Err(error) => return Err(error),
+        };
         let master = pty
             .file()
             .try_clone()
