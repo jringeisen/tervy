@@ -51,7 +51,11 @@ def backup(source, archive):
         os.close(descriptor)
         try:
             with tarfile.open(temporary, "w:gz") as output:
-                metadata = json.dumps({"format": 1, "state_path": str(source.resolve())}).encode()
+                metadata = json.dumps({
+                    "format": 1,
+                    "state_path": str(source.absolute()),
+                    "resolved_state_path": str(source.resolve()),
+                }).encode()
                 header = tarfile.TarInfo("TERVY_BACKUP.json")
                 header.size = len(metadata)
                 header.mode = 0o600
@@ -84,7 +88,9 @@ def restore(target, archive):
             metadata = json.load(source.extractfile(metadata_member))
             if metadata.get("format") != 1:
                 raise ValueError("Unsupported backup format")
-            original_root = Path(metadata["state_path"])
+            original_roots = [Path(metadata["state_path"])]
+            if metadata.get("resolved_state_path"):
+                original_roots.append(Path(metadata["resolved_state_path"]))
             for member in members:
                 if member.name == "TERVY_BACKUP.json":
                     continue
@@ -101,7 +107,7 @@ def restore(target, archive):
                     with source.extractfile(member) as input_file, destination.open("xb") as output_file:
                         shutil.copyfileobj(input_file, output_file)
                     destination.chmod(0o600)
-        relocate_meeting_paths(staging, original_root, target)
+        relocate_meeting_paths(staging, original_roots, target)
         verify_database(staging)
         if target.exists():
             target.rmdir()
@@ -112,9 +118,9 @@ def restore(target, archive):
     print(f"State restored: {target}")
 
 
-def relocate_meeting_paths(staging, original_root, target):
+def relocate_meeting_paths(staging, original_roots, target):
     database = staging / "state.db"
-    if not database.exists() or original_root == target:
+    if not database.exists() or target in original_roots:
         return
     with sqlite3.connect(database) as connection:
         has_meetings = connection.execute(
@@ -127,9 +133,23 @@ def relocate_meeting_paths(staging, original_root, target):
             changed = False
             for key in ("audio_path", "microphone_path"):
                 path = meeting.get(key)
-                if path and Path(path).is_relative_to(original_root):
-                    meeting[key] = str(target / Path(path).relative_to(original_root))
-                    changed = True
+                if not path:
+                    continue
+                audio_path = Path(path)
+                for original_root in original_roots:
+                    if audio_path.is_relative_to(original_root):
+                        meeting[key] = str(target / audio_path.relative_to(original_root))
+                        changed = True
+                        break
+                else:
+                    # Older backups stored only the resolved root. The path in
+                    # a record may still use /var instead of /private/var.
+                    resolved = audio_path.resolve(strict=False)
+                    for original_root in original_roots:
+                        if resolved.is_relative_to(original_root):
+                            meeting[key] = str(target / resolved.relative_to(original_root))
+                            changed = True
+                            break
             if changed:
                 connection.execute(
                     "UPDATE meetings SET record=? WHERE id=?",
@@ -147,7 +167,7 @@ def main():
         backup(path, args.archive.expanduser().resolve())
     else:
         # Existing state must be moved manually so restoring never overwrites it.
-        if path.exists():
+        if path.exists() and any(path.iterdir()):
             with unlocked(path):
                 pass
         restore(path, args.archive.expanduser().resolve())
