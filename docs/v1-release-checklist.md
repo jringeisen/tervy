@@ -46,11 +46,11 @@ until the signed candidate and data safety checks pass.
 
 ## Evidence collected on 2026-10-11
 
-- [macOS 15 compatibility smoke](https://github.com/jringeisen/tervy/actions/runs/38156157428)
+- [macOS 15 compatibility smoke](https://github.com/jringeisen/tervy/actions/runs/38156744316)
   passed on an Apple Silicon runner. It built the app bundle on macOS 26,
   transferred it to macOS 15, verified the ad hoc signature and minimum OS
-  version, and loaded the CLI entry point. A clean-account GUI install remains
-  open.
+  version, loaded the CLI entry point, and rendered a synthetic first app
+  frame. A clean-account install and full core workflow remain open.
 - After Tervy quit, an offline backup of existing DevDesk state restored into
   an isolated temporary directory. The check verified the configuration,
   12 non-database files, SQLite integrity, one prompt, one meeting, and that
