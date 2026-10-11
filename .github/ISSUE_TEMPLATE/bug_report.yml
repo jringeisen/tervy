@@ -1,0 +1,69 @@
+name: Bug report
+description: Report a reproducible Tervy problem
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please follow the [security policy](https://github.com/jringeisen/tervy/blob/main/SECURITY.md)
+        for security issues.
+        Remove credentials, project source, terminal output, prompts, meeting audio,
+        transcripts, and agent conversations from anything you attach.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Projects, terminals, or processes
+        - Coding agents or side conversations
+        - Prompts Library
+        - Experimental meetings
+        - Install or update
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Tervy version or commit
+      placeholder: "For example, 0.1.0 or a commit hash"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: macOS version and chip
+      placeholder: "For example, macOS 15.7 on M2"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use synthetic project names and content where possible.
+      placeholder: |
+        1. Open a project...
+        2. Start a terminal...
+        3. Observe...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and impact
+      description: Say whether work was lost, the task was blocked, or a workaround exists.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Include the agent CLI and its version if relevant. Review and redact logs or screenshots before attaching them.
+    validations:
+      required: false
