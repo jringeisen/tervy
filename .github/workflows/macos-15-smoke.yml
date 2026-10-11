@@ -1,0 +1,46 @@
+name: macOS 15 compatibility smoke
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.99.0 --profile minimal
+          rustup default 1.99.0
+      - name: Build the app bundle
+        run: |
+          scripts/bundle.sh "$RUNNER_TEMP/Tervy.app"
+          ditto -c -k --keepParent "$RUNNER_TEMP/Tervy.app" "$RUNNER_TEMP/Tervy-app.zip"
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Tervy-app-for-macos-15-smoke
+          path: ${{ runner.temp }}/Tervy-app.zip
+          if-no-files-found: error
+  smoke:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v6
+        with:
+          name: Tervy-app-for-macos-15-smoke
+          path: ${{ runner.temp }}
+      - name: Verify the transferred app on macOS 15
+        run: |
+          test "$(sw_vers -productVersion | cut -d. -f1)" = 15
+          test "$(uname -m)" = arm64
+          ditto -x -k "$RUNNER_TEMP/Tervy-app.zip" "$RUNNER_TEMP"
+          app="$RUNNER_TEMP/Tervy.app"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 15.0
+          test "$(lipo -archs "$app/Contents/MacOS/devdesk")" = arm64
+          codesign --verify --deep --strict --verbose=2 "$app"
+          "$app/Contents/MacOS/devdesk" hook compatibility-smoke
+          echo 'Tervy bundle and CLI entry point loaded on macOS 15 arm64.'
