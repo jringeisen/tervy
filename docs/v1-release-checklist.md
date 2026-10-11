@@ -54,9 +54,10 @@ until the signed candidate and data safety checks pass.
 - After Tervy quit, an offline backup of existing DevDesk state restored into
   an isolated temporary directory. The check verified the configuration,
   12 non-database files, SQLite integrity, one prompt, one meeting, and that
-  restored meeting paths no longer referred to the original state. The archive
-  and restored copy were deleted after verification. An actual app upgrade and
-  clean-account restore remain open.
+  restored meeting paths no longer referred to the original state. The current
+  core also parsed the restored configuration and loaded one project, one
+  agent, one prompt, and one meeting. The archive and restored copy were deleted
+  after verification. An actual app upgrade and clean-account restore remain open.
 - No Developer ID Application signing identity was available on the build Mac.
   Signing, notarization, Gatekeeper, and signed recording permissions remain
   open. The closed beta protocol is in [closed-beta-guide.md](closed-beta-guide.md).
