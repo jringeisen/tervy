@@ -108,8 +108,10 @@ user-visible battery or responsiveness problems seen in beta.
 
 The repository's `scripts/check.sh` currently passes formatting, Clippy,
 ordinary tests, and dependency license checks. Those checks establish code
-health, not first-use quality or signed-build behavior. The manual beta GitHub
-workflow had no run at the time of this review. The M7 performance and crash
+health, not first-use quality or signed-build behavior. On 2026-10-11,
+[CI](https://github.com/jringeisen/tervy/actions/runs/38153364562) passed on
+macOS 26 and the [manual beta workflow](https://github.com/jringeisen/tervy/actions/runs/38153630235)
+built, verified, and uploaded a private review DMG. The M7 performance and crash
 limits remain recorded in [m7-review.md](m7-review.md).
 
 The first implementation pass added Apache-2.0 and brand terms, participation
