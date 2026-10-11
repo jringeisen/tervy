@@ -6,6 +6,7 @@ impl Workspace {
         self.readiness = Some(crate::setup::Readiness {
             shell: true,
             agents: vec![],
+            meetings_supported: true,
             warning: None,
         });
         self.setup_open = true;
@@ -74,6 +75,13 @@ impl Workspace {
             .border_t_1()
             .border_color(theme.border);
         if let Some(readiness) = &self.readiness {
+            summary = summary.child(div().text_xs().text_color(theme.muted_foreground).child(
+                if readiness.meetings_supported {
+                    "Meetings are experimental on macOS 26+."
+                } else {
+                    "Experimental meetings require macOS 26 or later."
+                },
+            ));
             for (name, available, optional) in std::iter::once(("Shell", readiness.shell, false))
                 .chain(
                     agent::Provider::ALL.into_iter().map(|provider| {

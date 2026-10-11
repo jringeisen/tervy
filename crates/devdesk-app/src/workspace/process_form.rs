@@ -19,6 +19,8 @@ impl Workspace {
         self.customization_preview = None;
         self.palette_open = false;
         self.process_project = Some(project);
+        self.process_edit = None;
+        self.process_autostart = false;
         self.process_error = None;
         self.process_name_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -26,6 +28,51 @@ impl Workspace {
         });
         self.process_command_input
             .update(cx, |input, cx| input.set_value("", window, cx));
+        cx.notify();
+    }
+
+    pub(super) fn show_edit_process_form(
+        &mut self,
+        session: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.process_saving {
+            return;
+        }
+        let Some(info) = self.tabs.get(&session).map(|tab| &tab.info) else {
+            return;
+        };
+        let Some(process_id) = info.process.as_ref() else {
+            return;
+        };
+        let Some(spec) = self
+            .projects
+            .iter()
+            .find(|project| project.id == info.project)
+            .and_then(|project| {
+                project
+                    .processes
+                    .iter()
+                    .find(|process| &process.id == process_id)
+            })
+            .cloned()
+        else {
+            self.error = Some("Process is no longer configured".into());
+            return;
+        };
+        let project = info.project.clone();
+        let process_id = process_id.clone();
+        self.show_process_form(project, window, cx);
+        self.process_edit = Some(process_id);
+        self.process_autostart = spec.autostart;
+        self.process_name_input.update(cx, |input, cx| {
+            input.set_value(spec.name, window, cx);
+            input.focus(window, cx);
+        });
+        self.process_command_input.update(cx, |input, cx| {
+            input.set_value(spec.command, window, cx);
+        });
         cx.notify();
     }
 
@@ -52,11 +99,21 @@ impl Workspace {
         };
         if self.process_error.is_none() {
             self.process_saving = true;
-            self.core.send(CoreCommand::AddProcess {
-                project,
-                name,
-                command,
-            });
+            if let Some(process) = self.process_edit.clone() {
+                self.core.send(CoreCommand::EditProcess {
+                    project,
+                    process,
+                    name,
+                    command,
+                    autostart: self.process_autostart,
+                });
+            } else {
+                self.core.send(CoreCommand::AddProcess {
+                    project,
+                    name,
+                    command,
+                });
+            }
         }
         cx.notify();
     }
@@ -66,6 +123,7 @@ impl Workspace {
             return;
         }
         self.process_project = None;
+        self.process_edit = None;
         self.process_error = None;
         self.restore_focus(window, cx);
         cx.notify();
@@ -79,11 +137,14 @@ impl Workspace {
             .map(|p| p.name.as_str())
             .unwrap_or("project");
         let mut panel = dialog_panel(480., cx.theme())
-            .child(
-                div()
-                    .font_semibold()
-                    .child(format!("Add process · {project}")),
-            )
+            .child(div().font_semibold().child(format!(
+                "{} process · {project}",
+                if self.process_edit.is_some() {
+                    "Edit"
+                } else {
+                    "Add"
+                }
+            )))
             .child(
                 v_flex()
                     .gap_2()
@@ -102,11 +163,30 @@ impl Workspace {
                     })
                     .child(modal_input(&self.process_command_input, "Command")),
             )
+            .when(self.process_edit.is_some(), |panel| {
+                panel.child(
+                    Button::new("process-autostart")
+                        .ghost()
+                        .label(if self.process_autostart {
+                            "Autostart: On"
+                        } else {
+                            "Autostart: Off"
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.process_autostart = !this.process_autostart;
+                            cx.notify();
+                        })),
+                )
+            })
             .child(
                 div()
                     .text_xs()
                     .text_color(cx.theme().muted_foreground)
-                    .child("Runs in the project folder. Add it now, then choose Start when ready."),
+                    .child(if self.process_edit.is_some() {
+                        "Changes to a running command apply when you restart the process."
+                    } else {
+                        "Runs in the project folder. Add it now, then choose Start when ready."
+                    }),
             );
         if let Some(error) = &self.process_error {
             panel = panel.child(
@@ -124,9 +204,13 @@ impl Workspace {
                         .primary()
                         .loading(self.process_saving)
                         .label(if self.process_saving {
-                            "Adding…"
+                            "Saving…"
                         } else {
-                            "Add process"
+                            if self.process_edit.is_some() {
+                                "Save process"
+                            } else {
+                                "Add process"
+                            }
                         })
                         .disabled(self.process_saving)
                         .on_click(cx.listener(|this, _, _, cx| this.save_process(cx))),

@@ -8,7 +8,8 @@ fn main() {
     }
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let target = root.join("target");
-    let cache = target.join("meeting-helper-cache");
+    let cache =
+        std::env::temp_dir().join(format!("tervy-meeting-helper-cache-{}", std::process::id()));
     std::fs::create_dir_all(&cache).expect("meeting helper module cache");
     let result = Command::new("swiftc")
         .args(["-target", "arm64-apple-macosx26.0"])
@@ -20,5 +21,6 @@ fn main() {
         .arg(target.join("meeting-audio"))
         .status()
         .expect("swiftc for meeting audio");
+    let _ = std::fs::remove_dir_all(cache);
     assert!(result.success(), "could not compile meeting audio helper");
 }

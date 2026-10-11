@@ -2,6 +2,15 @@
 
 **Keep your tools together. Keep your agents moving.**
 
+## Asset rights
+
+The original logos, wordmarks, app icons, identity source, and other artwork in
+this directory are reserved for the official Tervy project and excluded from
+the repository's Apache-2.0 grant. You may use them to build and redistribute
+an unmodified Tervy release and to accurately refer to Tervy. A modified fork
+must use its own name and visual identity. Ask the maintainer before reusing
+Tervy artwork for another product.
+
 Tervy is a focused desktop workspace for terminals, tools, and coding agents.
 The identity should feel clear, capable, and calm: a useful place to work, with
 visible momentum.

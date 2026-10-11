@@ -81,12 +81,75 @@ impl Workspace {
     }
 
     pub(super) fn record_meeting(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .readiness
+            .as_ref()
+            .is_some_and(|ready| !ready.meetings_supported)
+        {
+            self.open_meetings(window, cx);
+            self.meeting_error =
+                Some("Experimental meeting recording requires macOS 26 or later".into());
+            cx.notify();
+            return;
+        }
         if self.active_recording().is_some() {
             return;
         }
         self.meeting_error = None;
         self.open_meetings(window, cx);
-        self.core.send(CoreCommand::StartMeeting);
+        self.meeting_record_choice = true;
+        cx.notify();
+    }
+
+    pub(super) fn choose_meeting_notes(
+        &mut self,
+        notes_delivery: meetings::NotesDelivery,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.meeting_record_choice = false;
+        self.core.send(CoreCommand::StartMeeting { notes_delivery });
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn meeting_record_dialog(&self, cx: &Context<Self>) -> AnyElement {
+        let theme = cx.theme();
+        let has = |provider| {
+            self.readiness
+                .as_ref()
+                .is_some_and(|readiness| readiness.agents.contains(&provider))
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(hsla(0., 0., 0., 0.3))
+            .flex()
+            .justify_center()
+            .items_center()
+            .child(
+                dialog_panel(500., theme)
+                    .child(div().font_semibold().child("Start experimental recording"))
+                    .child(div().text_sm().child("Tervy captures microphone and Mac audio. Audio and transcription stay on this Mac. Choose whether Tervy sends the transcript to a signed-in CLI for notes. Launched agents with meeting tools can also read Library meetings."))
+                    .child(div().text_xs().text_color(theme.muted_foreground).child("macOS 26+ required. Recordings can use roughly 700 MB per hour."))
+                    .child(v_flex().gap_2()
+                        .child(Button::new("record-local-only").primary().label("Record · skip AI notes")
+                            .on_click(cx.listener(|this, _, window, cx| this.choose_meeting_notes(meetings::NotesDelivery::LocalOnly, window, cx))))
+                        .child(Button::new("record-with-codex").label("Record · send transcript to Codex")
+                            .disabled(!has(agent::Provider::Codex))
+                            .on_click(cx.listener(|this, _, window, cx| this.choose_meeting_notes(meetings::NotesDelivery::Codex, window, cx))))
+                        .child(Button::new("record-with-claude").label("Record · send transcript to Claude Code")
+                            .disabled(!has(agent::Provider::Claude))
+                            .on_click(cx.listener(|this, _, window, cx| this.choose_meeting_notes(meetings::NotesDelivery::Claude, window, cx))))
+                        .child(Button::new("cancel-recording").ghost().label("Cancel")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.meeting_record_choice = false;
+                                this.restore_focus(window, cx);
+                                cx.notify();
+                            }))))
+            )
+            .into_any_element()
     }
 
     pub(super) fn stop_meeting(&mut self, cx: &mut Context<Self>) {
@@ -189,12 +252,12 @@ impl Workspace {
             .overflow_y_scroll()
             .p_5()
             .gap_4()
-            .child(div().text_lg().font_semibold().child("Meetings"))
+            .child(div().text_lg().font_semibold().child("Meetings · Experimental"))
             .child(
                 div()
                     .text_xs()
                     .text_color(theme.muted_foreground)
-                    .child("Records microphone and Mac audio. Transcription runs on your Mac; your signed-in AI provider generates notes."),
+                    .child("Requires macOS 26+. Records microphone and Mac audio. Transcription runs on your Mac; choose whether Codex or Claude receives the transcript for notes."),
             );
         if let Some(error) = &self.meeting_error {
             panel = panel.child(
@@ -242,6 +305,13 @@ impl Workspace {
                             .font_semibold()
                             .child(Self::meeting_status_label(meeting.status)),
                     )
+                    .child(div().text_xs().text_color(theme.muted_foreground).child(
+                        match meeting.notes_delivery {
+                            meetings::NotesDelivery::LocalOnly => "Notes provider: none",
+                            meetings::NotesDelivery::Codex => "Notes provider: Codex",
+                            meetings::NotesDelivery::Claude => "Notes provider: Claude Code",
+                        },
+                    ))
                     .when_some(meeting.error.clone(), |view, error| {
                         view.child(div().text_sm().text_color(theme.danger).child(error))
                     })
@@ -298,7 +368,11 @@ impl Workspace {
                                 div()
                                     .text_sm()
                                     .text_color(theme.muted_foreground)
-                                    .child("Notes will appear after processing. You can also add your own.")
+                                    .child(if meeting.notes_delivery == meetings::NotesDelivery::LocalOnly {
+                                        "No AI notes request was sent. Add your own notes here."
+                                    } else {
+                                        "Notes will appear after processing. You can also add your own."
+                                    })
                                     .into_any_element()
                             } else {
                                 TextView::markdown("meeting-notes-preview", displayed_notes)
@@ -335,7 +409,11 @@ impl Workspace {
                                                     | meetings::Status::GeneratingNotes
                                             ),
                                     )
-                                    .label("Retry processing")
+                                    .label(match meeting.notes_delivery {
+                                        meetings::NotesDelivery::LocalOnly => "Retry transcription",
+                                        meetings::NotesDelivery::Codex => "Retry · send to Codex",
+                                        meetings::NotesDelivery::Claude => "Retry · send to Claude",
+                                    })
                                     .on_click(cx.listener({
                                         let id = meeting.id.clone();
                                         move |this, _, _, _| {

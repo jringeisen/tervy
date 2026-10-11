@@ -14,7 +14,7 @@ executable=$(mktemp "$bundle/Contents/MacOS/.devdesk.XXXXXX")
 install -m 755 target/release/devdesk "$executable"
 mv -f "$executable" "$bundle/Contents/MacOS/devdesk"
 install -m 755 target/meeting-audio "$bundle/Contents/MacOS/meeting-audio"
-swiftc -module-cache-path target/perf-helpers/module-cache scripts/icon.swift -o "$work/icon"
+swiftc -module-cache-path "$work/module-cache" scripts/icon.swift -o "$work/icon"
 "$work/icon" assets/brand/identity.json "$work/full.png"
 install -m 644 "$work/full.png" "$bundle/Contents/Resources/Tervy.png"
 for size in 16 32 128 256 512; do
@@ -27,7 +27,7 @@ python3 - "$bundle" <<'PY'
 import plistlib, tomllib, sys
 from pathlib import Path
 version=tomllib.loads(Path('Cargo.toml').read_text())['workspace']['package']['version']
-info={'CFBundleExecutable':'devdesk','CFBundleName':'Tervy','CFBundleDisplayName':'Tervy','CFBundleIdentifier':'com.jringeisen.DevDesk','CFBundlePackageType':'APPL','CFBundleShortVersionString':version,'CFBundleVersion':version,'CFBundleIconFile':'Tervy','NSHighResolutionCapable':True,'NSRequiresAquaSystemAppearance':False,'NSMicrophoneUsageDescription':'Tervy records your microphone when you start a meeting recording.','NSAudioCaptureUsageDescription':'Tervy records meeting audio playing on your Mac when you start a recording.'}
+info={'CFBundleExecutable':'devdesk','CFBundleName':'Tervy','CFBundleDisplayName':'Tervy','CFBundleIdentifier':'com.jringeisen.DevDesk','CFBundlePackageType':'APPL','CFBundleShortVersionString':version,'CFBundleVersion':version,'CFBundleIconFile':'Tervy','LSMinimumSystemVersion':'15.0','NSHighResolutionCapable':True,'NSRequiresAquaSystemAppearance':False,'NSMicrophoneUsageDescription':'Tervy records your microphone when you start a meeting recording.','NSAudioCaptureUsageDescription':'Tervy records meeting audio playing on your Mac when you start a recording.','NSScreenCaptureUsageDescription':'Tervy captures Mac audio when you start an experimental meeting recording.'}
 (Path(sys.argv[1]) / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
 PY
 plutil -lint "$bundle/Contents/Info.plist"

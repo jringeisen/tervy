@@ -1,10 +1,22 @@
 # Tervy
 
-Native macOS developer workspace for Apple Silicon: shell terminals, configured
-Laravel/Vite processes, embedded Claude Code and Codex TUIs, and read-only side
-conversations made with the CLIs' native forks. Implementation milestones M0–M7
-are complete; performance limitations and validation evidence are recorded in
-[the final review](docs/m7-review.md).
+Tervy is an open source macOS workspace for solo developers who work in terminals
+and with coding agents. Open a project, run its commands, work with Claude Code or
+Codex, and return to your sessions later. Other installed agents can run as
+interactive terminals; their integration is more limited. [Meeting recording](#experimental-meeting-recordings)
+is experimental.
+
+Tervy targets Apple Silicon with macOS 15 or later for the core workspace.
+Experimental meeting recording requires macOS 26 or later. Implementation milestones M0–M7 are
+complete; performance limits and validation evidence are in the
+[final technical review](docs/m7-review.md). The [v1 product review](docs/v1-product-review.md)
+tracks the remaining product and release work.
+
+The Tervy application code is [Apache-2.0 licensed](LICENSE). Original Tervy
+brand assets are reserved; see the [brand usage terms](assets/brand/README.md#asset-rights).
+Vendored dependencies retain their own licenses and attribution in
+[vendor/README.md](vendor/README.md). See [Contributing](CONTRIBUTING.md) and
+[Support](SUPPORT.md) for project participation and help.
 
 Build with Rust via rustup and Apple's Command Line Tools. Install `cargo-deny`
 with Homebrew for the quality gate. Use Xcode only if your toolchain cannot
@@ -24,19 +36,23 @@ final location **before launching agents**: each CLI receives the absolute path
 to that bundle's `Contents/MacOS/devdesk` hook helper. Stop agents before moving
 or replacing the bundle, then resume them from the new app.
 
-### Meeting recordings
+### Experimental meeting recordings
 
-Use **Record** in the toolbar to capture both your microphone and meeting audio
-playing on your Mac. **Stop** saves the audio, transcribes it on device, then
-uses your signed-in Codex or Claude Code CLI to write meeting notes. Recordings,
+This feature is experimental in v1 and requires more signed-build and privacy
+validation before it is considered a dependable recording tool. Use **Record**
+in the toolbar to capture both your microphone and meeting audio
+playing on your Mac. Choose to skip AI notes or send the transcript to your
+signed-in Codex or Claude Code CLI for notes. **Stop** saves the audio and
+transcribes it on device. Recordings,
 transcripts, and editable notes appear in **Library → Meetings**. Audio stays on
 your Mac by default; **Delete audio** removes both tracks while keeping the
 transcript and notes. **Delete meeting** removes the whole entry. If processing
 fails, the meeting stays in the Library and can be retried while its audio is
 present. macOS may ask for microphone and system audio recording permission.
 On-device transcription requires macOS 26 or later and a supported language.
-The transcript is sent to the configured AI provider through its agent CLI to
-generate notes. Saved audio is uncompressed and can use roughly 700 MB per hour
+If selected, the transcript is sent to that AI provider through its agent CLI to
+generate notes. Agents you launch with Tervy's meeting tools can read Library
+meetings. Saved audio is uncompressed and can use roughly 700 MB per hour
 for two stereo tracks.
 
 The whole workspace follows macOS light/dark appearance, including open terminal
@@ -84,6 +100,8 @@ failures, and muted outlines for stopped or exited sessions.
 Navigate sessions in the project sidebar. **Processes → +** opens a modal for
 the process name and command. The definition is saved to configuration and
 appears stopped; use its start control to run it in the project folder.
+Use **Edit** on the process row to change its name, command, or autostart. A
+running process uses the old command until you restart it.
 **Terminals → +** opens a shell;
 **Agents → +** discovers installed Claude Code, Codex, Gemini CLI, OpenCode, and
 Aider executables on your login-shell PATH and offers only those agents.
@@ -121,7 +139,7 @@ the session is stopped, has not been sampled yet, or its memory is unavailable.
 Agent status and provider details are available by hovering over its name.
 
 Configuration lives at `~/Library/Application Support/DevDesk/config.toml`.
-Add projects with Cmd-O; add process definitions with **Processes → +**, or edit them in that global file (the app
+Add projects with Cmd-O; add process definitions with **Processes → +**, or edit advanced settings in that global file (the app
 watches it and keeps the last valid configuration after an error). Example:
 
 ```toml
@@ -199,6 +217,28 @@ current/previous logs and a separate panic log containing source locations rathe
 than panic payloads. Crash recovery offers verified surviving sessions for
 termination; a detached Codex job born and orphaned between journal scans can
 escape discovery, so recovery remains best effort.
+
+### Back up and restore local data
+
+Stop sessions and quit Tervy, then run:
+
+```sh
+python3 scripts/data-backup.py backup ~/Desktop/tervy-backup.tar.gz
+```
+
+The archive includes configuration, prompts,
+meeting records and audio, and agent/session metadata. It does not include
+project files or terminal scrollback. Keep the archive private: it can contain
+personal prompts and recordings. To restore, quit Tervy, move the existing
+`~/Library/Application Support/DevDesk` directory aside, then run:
+
+```sh
+python3 scripts/data-backup.py restore ~/Desktop/tervy-backup.tar.gz
+```
+
+The restore
+refuses to overwrite existing state and checks the SQLite database. The old
+DevDesk data path remains in use for compatibility with earlier builds.
 
 Reproduce the final measurements with `scripts/perf/run-m7.sh`, then compare
 records using `scripts/perf/compare.py perf/baseline-m2.json perf/baseline.json`.

@@ -5,7 +5,7 @@ permissions:
   contents: read
 jobs:
   mac-beta:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6

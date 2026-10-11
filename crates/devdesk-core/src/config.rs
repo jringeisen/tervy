@@ -450,6 +450,73 @@ pub fn append_process(
     Ok(config)
 }
 
+/// Edit a process definition without changing its stable ID or other advanced fields.
+/// Running processes keep their existing command until explicitly restarted.
+pub fn edit_process(
+    path: &Path,
+    project_id: &str,
+    process_id: &str,
+    name: &str,
+    command: &str,
+    autostart: bool,
+) -> Result<Config, String> {
+    let name = name.trim();
+    let command = command.trim();
+    if name.is_empty() || name.chars().count() > 100 || name.chars().any(char::is_control) {
+        return Err("Enter a process name (1–100 characters)".into());
+    }
+    if command.is_empty() || command.len() > 8192 || command.contains('\0') {
+        return Err("Enter a command (up to 8 KiB)".into());
+    }
+    let original = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut document: toml_edit::DocumentMut = original
+        .parse()
+        .map_err(|error: toml_edit::TomlError| error.to_string())?;
+    let process = document
+        .get_mut("projects")
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|projects| {
+            projects.iter_mut().find(|project| {
+                project.get("id").and_then(toml_edit::Item::as_str) == Some(project_id)
+            })
+        })
+        .and_then(|project| project.get_mut("processes"))
+        .and_then(toml_edit::Item::as_array_of_tables_mut)
+        .and_then(|processes| {
+            processes.iter_mut().find(|process| {
+                process.get("id").and_then(toml_edit::Item::as_str) == Some(process_id)
+            })
+        })
+        .ok_or("Process is no longer configured")?;
+    process["name"] = toml_edit::value(name);
+    process["command"] = toml_edit::value(command);
+    process["autostart"] = toml_edit::value(autostart);
+    let output = document.to_string();
+    let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
+    let config = parse(&output, &home)?;
+    let temporary = path.with_file_name(format!(".edit-process-{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|error| error.to_string())?;
+        file.write_all(output.as_bytes())
+            .and_then(|_| file.sync_all())
+            .map_err(|error| error.to_string())?;
+        if std::fs::read_to_string(path).map_err(|error| error.to_string())? != original {
+            return Err("config.toml changed while editing the process; try again".into());
+        }
+        std::fs::rename(&temporary, path).map_err(|error| error.to_string())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temporary);
+    }
+    result?;
+    Ok(config)
+}
+
 /// Remove only a DevDesk configuration entry; project files are never touched.
 /// Re-read before atomic replacement to preserve comments and reject editor races.
 pub fn remove(path: &Path, project_id: &str, process_id: Option<&str>) -> Result<Config, String> {
@@ -511,6 +578,33 @@ pub fn remove(path: &Path, project_id: &str, process_id: Option<&str>) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn editing_process_preserves_identity_comments_and_advanced_settings() {
+        let directory =
+            std::env::temp_dir().join(format!("tervy-edit-process-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.toml");
+        std::fs::write(&path, format!(
+            "# user's comment\n[[projects]]\nid = 'app'\nname = 'App'\npath = '{}'\n[[projects.processes]]\nid = 'server'\nname = 'Server'\ncommand = 'old command'\nautostart = false\nstop_timeout_secs = 20\n",
+            directory.display()
+        )).unwrap();
+        let config =
+            edit_process(&path, "app", "server", "New server", "new command", true).unwrap();
+        let process = &config.projects[0].processes[0];
+        assert_eq!(process.id, "server");
+        assert_eq!(process.name, "New server");
+        assert_eq!(process.command, "new command");
+        assert!(process.autostart);
+        assert_eq!(process.stop_timeout_secs, 20);
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .starts_with("# user's comment")
+        );
+        assert!(edit_process(&path, "app", "missing", "No", "command", false).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn validates_duplicates_and_preserves_project_comments() {
         let directory = std::env::temp_dir().join(format!("devdesk-config-{}", std::process::id()));

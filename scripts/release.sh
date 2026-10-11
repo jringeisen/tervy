@@ -38,7 +38,7 @@ if result.get('status') != 'Accepted':
 PY
 }
 if [[ "$mode" == public ]]; then
-    codesign --force --options runtime --timestamp --sign "$DEVDESK_SIGNING_IDENTITY" "$app/Contents/MacOS/meeting-audio"
+    codesign --force --options runtime --timestamp --entitlements scripts/meeting-audio.entitlements.plist --sign "$DEVDESK_SIGNING_IDENTITY" "$app/Contents/MacOS/meeting-audio"
     codesign --force --options runtime --timestamp --sign "$DEVDESK_SIGNING_IDENTITY" "$app"
     codesign --verify --deep --strict --verbose=2 "$app"
     ditto -c -k --keepParent "$app" "$work/Tervy.zip"
@@ -64,7 +64,8 @@ Press Cmd-P and choose Setup and Prerequisites to check available tools.
 
 Cmd-P searches commands. Cmd-T opens a terminal. Cmd-O adds a project.
 
-This beta supports Apple Silicon Macs. Settings and sessions stay local;
+This beta supports Apple Silicon Macs on macOS 15 or later. Meetings require
+macOS 26 or later. Settings and sessions stay local;
 installing on another computer does not sync them.
 Stop running sessions and quit Tervy before replacing an installed build.
 TXT

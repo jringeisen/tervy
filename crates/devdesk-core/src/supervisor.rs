@@ -48,7 +48,9 @@ pub struct SessionInfo {
 
 pub enum Command {
     ListMeetings,
-    StartMeeting,
+    StartMeeting {
+        notes_delivery: meetings::NotesDelivery,
+    },
     StopMeeting,
     RetryMeeting(String),
     OpenMeetingAudio {
@@ -160,6 +162,13 @@ pub enum Command {
         name: String,
         command: String,
     },
+    EditProcess {
+        project: String,
+        process: String,
+        name: String,
+        command: String,
+        autostart: bool,
+    },
     ReloadConfig,
     Shutdown,
 }
@@ -205,6 +214,10 @@ pub enum CoreEvent {
     ConfigError(String),
     ProjectAdded(String),
     ProcessAdded(String),
+    ProcessEdited {
+        project: String,
+        process: String,
+    },
     ProcessAddFailed {
         project: String,
         error: String,
@@ -934,7 +947,7 @@ impl Actor {
         }
         match command {
             Command::ListMeetings => self.list_meetings(),
-            Command::StartMeeting => self.start_meeting(),
+            Command::StartMeeting { notes_delivery } => self.start_meeting(notes_delivery),
             Command::StopMeeting => self.stop_meeting(),
             Command::RetryMeeting(id) => self.retry_meeting(id),
             Command::OpenMeetingAudio { id, microphone } => self.open_meeting_audio(id, microphone),
@@ -1189,6 +1202,25 @@ impl Actor {
                 }
                 Err(error) => self.emit(CoreEvent::ProcessAddFailed { project, error }),
             },
+            Command::EditProcess {
+                project,
+                process,
+                name,
+                command,
+                autostart,
+            } => {
+                match config::edit_process(
+                    &self.path, &project, &process, &name, &command, autostart,
+                ) {
+                    Ok(config) => {
+                        self.config = config;
+                        self.emit(CoreEvent::Config(self.config.clone()));
+                        self.sync_processes();
+                        self.emit(CoreEvent::ProcessEdited { project, process });
+                    }
+                    Err(error) => self.emit(CoreEvent::ProcessAddFailed { project, error }),
+                }
+            }
             Command::NewShell { project, size } => self.new_shell(project, size, None),
             Command::NewTerminalPreset { project, name } => {
                 let preset = self
@@ -1343,7 +1375,13 @@ impl Actor {
         self.list_meetings();
     }
 
-    fn start_meeting(&mut self) {
+    fn start_meeting(&mut self, notes_delivery: meetings::NotesDelivery) {
+        if !meetings::supported_os() {
+            self.emit(CoreEvent::MeetingError(
+                "Experimental meeting recording requires macOS 26 or later".into(),
+            ));
+            return;
+        }
         if self.meeting_stop.is_some() {
             self.emit(CoreEvent::MeetingError(
                 "A meeting is already recording".into(),
@@ -1358,6 +1396,7 @@ impl Actor {
                 .ok_or("Config folder unavailable")?
                 .join("meetings");
             let mut meeting = meetings::Meeting::new(root);
+            meeting.notes_delivery = notes_delivery;
             let audio = meeting
                 .audio_path
                 .clone()
@@ -1377,12 +1416,18 @@ impl Actor {
                 .save_meeting(&mut meeting)?;
             let id = meeting.id.clone();
             let sender = self.sender.clone();
-            let stop = meetings::start_recording(audio, microphone, helper, move |update| {
-                let _ = sender.send(Message::Meeting {
-                    id: id.clone(),
-                    update,
-                });
-            });
+            let stop = meetings::start_recording(
+                audio,
+                microphone,
+                helper,
+                notes_delivery,
+                move |update| {
+                    let _ = sender.send(Message::Meeting {
+                        id: id.clone(),
+                        update,
+                    });
+                },
+            );
             self.meeting_stop = Some((meeting.id.clone(), stop));
             self.emit(CoreEvent::MeetingUpdated(meeting));
             Ok::<(), String>(())
@@ -1453,6 +1498,10 @@ impl Actor {
                     meeting.status = meetings::Status::Ready;
                     meeting.error = None;
                 }
+                meetings::Update::Ready => {
+                    meeting.status = meetings::Status::Ready;
+                    meeting.error = None;
+                }
                 meetings::Update::Error(error) => {
                     meeting.status = meetings::Status::NeedsAttention;
                     meeting.error = Some(error);
@@ -1504,10 +1553,11 @@ impl Actor {
             let helper = meetings::helper_path()?;
             meeting.status = meetings::Status::Transcribing;
             meeting.error = None;
+            let notes_delivery = meeting.notes_delivery;
             store.save_meeting(&mut meeting)?;
             self.emit(CoreEvent::MeetingUpdated(meeting));
             let sender = self.sender.clone();
-            meetings::retry(audio, microphone, helper, move |update| {
+            meetings::retry(audio, microphone, helper, notes_delivery, move |update| {
                 let _ = sender.send(Message::Meeting {
                     id: id.clone(),
                     update,
@@ -2898,6 +2948,9 @@ impl Actor {
                     })
                     .map(|(_, spec)| spec.clone());
                 entry.info.config_changed = entry.desired.as_ref() != Some(&runtime.spec);
+                if let Some(desired) = &entry.desired {
+                    entry.info.name = desired.name.clone();
+                }
             }
         }
         for (project, spec) in configured {

@@ -91,6 +91,7 @@ enum PaletteAction {
     Start(SessionId),
     Stop(SessionId),
     Restart(SessionId),
+    EditProcess(SessionId),
     StartAll(String),
     StopAll(String),
     Recover,
@@ -130,6 +131,7 @@ pub struct Workspace {
     meetings: Vec<meetings::Meeting>,
     meeting_selected: Option<String>,
     meeting_error: Option<String>,
+    meeting_record_choice: bool,
     meeting_timer_running: bool,
     meeting_title_input: Entity<InputState>,
     meeting_notes_input: Entity<TextareaState>,
@@ -178,6 +180,8 @@ pub struct Workspace {
     side_focus: Option<SessionId>,
     rename_input: Entity<InputState>,
     process_project: Option<String>,
+    process_edit: Option<String>,
+    process_autostart: bool,
     process_name_input: Entity<InputState>,
     process_command_input: Entity<InputState>,
     process_error: Option<String>,
@@ -398,6 +402,7 @@ impl Workspace {
             meetings: vec![],
             meeting_selected: None,
             meeting_error: None,
+            meeting_record_choice: false,
             meeting_timer_running: false,
             meeting_title_input,
             meeting_notes_input,
@@ -443,6 +448,8 @@ impl Workspace {
             side_focus: None,
             rename_input,
             process_project: None,
+            process_edit: None,
+            process_autostart: false,
             process_name_input,
             process_command_input,
             process_error: None,
@@ -841,6 +848,18 @@ impl Workspace {
             CoreEvent::ProcessAdded(project) => {
                 if self.process_project.as_ref() == Some(&project) {
                     self.process_project = None;
+                    self.process_edit = None;
+                    self.process_error = None;
+                    self.process_saving = false;
+                    self.restore_focus(window, cx);
+                }
+            }
+            CoreEvent::ProcessEdited { project, process } => {
+                if self.process_project.as_ref() == Some(&project)
+                    && self.process_edit.as_ref() == Some(&process)
+                {
+                    self.process_project = None;
+                    self.process_edit = None;
                     self.process_error = None;
                     self.process_saving = false;
                     self.restore_focus(window, cx);
@@ -1322,8 +1341,17 @@ impl Workspace {
                                 let workspace = workspace.clone();
                                 let project = launch_project.clone();
                                 menu = menu.item(
-                                    PopupMenuItem::new(format!("Launch {}", provider.label()))
-                                        .on_click(move |_, window, cx| {
+                                    PopupMenuItem::new(format!(
+                                        "Launch {} · {}",
+                                        provider.label(),
+                                        if provider.tracks_sessions() {
+                                            "resume + side questions"
+                                        } else {
+                                            "basic terminal"
+                                        }
+                                    ))
+                                    .on_click(
+                                        move |_, window, cx| {
                                             let _ = workspace.update(cx, |this, cx| {
                                                 if this.shutdown.is_some() {
                                                     return;
@@ -1337,7 +1365,8 @@ impl Workspace {
                                                     cx,
                                                 );
                                             });
-                                        }),
+                                        },
+                                    ),
                                 );
                             }
                             let workspace = workspace.clone();
@@ -2183,7 +2212,15 @@ impl Workspace {
             }
             for provider in &installed_agents {
                 actions.push((
-                    format!("Launch {}", provider.label()),
+                    format!(
+                        "Launch {} · {}",
+                        provider.label(),
+                        if provider.tracks_sessions() {
+                            "integrated"
+                        } else {
+                            "basic terminal"
+                        }
+                    ),
                     PaletteAction::LaunchAgent(*provider, false),
                 ));
                 if provider.tracks_sessions() {
@@ -2230,6 +2267,10 @@ impl Workspace {
                         PaletteAction::Start(*id),
                     ));
                     actions.push((format!("Stop {}", tab.info.name), PaletteAction::Stop(*id)));
+                    actions.push((
+                        format!("Edit {} process", tab.info.name),
+                        PaletteAction::EditProcess(*id),
+                    ));
                     actions.push((
                         format!("Restart {}", tab.info.name),
                         PaletteAction::Restart(*id),
@@ -2375,6 +2416,7 @@ impl Workspace {
             PaletteAction::Start(id) => self.core.send(CoreCommand::Start(id)),
             PaletteAction::Stop(id) => self.core.send(CoreCommand::Stop(id)),
             PaletteAction::Restart(id) => self.core.send(CoreCommand::Restart(id)),
+            PaletteAction::EditProcess(id) => self.show_edit_process_form(id, window, cx),
             PaletteAction::StartAll(project) => self.core.send(CoreCommand::StartAll(project)),
             PaletteAction::StopAll(project) => self.core.send(CoreCommand::StopAll(project)),
             PaletteAction::Recover => self.core.send(CoreCommand::ShowOrphans),
@@ -3090,6 +3132,15 @@ impl Render for Workspace {
                                             ),
                                         )
                                         .child(
+                                            session_action(("edit-process", id.0), "Edit process")
+                                                .label("Edit")
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.show_edit_process_form(id, window, cx)
+                                                    },
+                                                )),
+                                        )
+                                        .child(
                                             session_action(
                                                 ("process-restart", id.0),
                                                 "Restart process",
@@ -3379,6 +3430,11 @@ impl Render for Workspace {
                 } else if event.keystroke.key == "escape" && this.process_project.is_some() {
                     this.cancel_process(window, cx);
                     cx.stop_propagation();
+                } else if event.keystroke.key == "escape" && this.meeting_record_choice {
+                    this.meeting_record_choice = false;
+                    this.restore_focus(window, cx);
+                    cx.stop_propagation();
+                    cx.notify();
                 } else if event.keystroke.key == "escape" && this.agent_launch.is_some() {
                     this.cancel_agent_form(window, cx);
                     cx.stop_propagation();
@@ -3637,6 +3693,9 @@ impl Render for Workspace {
         }
         if self.process_project.is_some() {
             body = body.child(self.process_form(cx));
+        }
+        if self.meeting_record_choice {
+            body = body.child(self.meeting_record_dialog(cx));
         }
         if self.agent_launch.is_some() {
             body = body.child(self.agent_form(cx));

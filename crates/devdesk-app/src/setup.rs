@@ -8,6 +8,7 @@ use std::path::Path;
 pub(crate) struct Readiness {
     pub shell: bool,
     pub agents: Vec<Provider>,
+    pub meetings_supported: bool,
     pub warning: Option<String>,
 }
 
@@ -39,6 +40,7 @@ pub(crate) fn inspect() -> Readiness {
     Readiness {
         shell: executable(Path::new(&environment.shell)),
         agents: discover_agents(&environment),
+        meetings_supported: devdesk_core::meetings::supported_os(),
         warning: environment.warning.clone(),
     }
 }

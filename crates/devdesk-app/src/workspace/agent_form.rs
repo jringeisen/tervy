@@ -143,6 +143,13 @@ impl Workspace {
         };
         let mut panel = dialog_panel(560., cx.theme())
             .child(div().font_semibold().child(format!("{verb} {} · {project}", provider.label())))
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(
+                if provider.tracks_sessions() {
+                    "Integrated resume and read-only side questions. CLI sign-in is not checked here."
+                } else {
+                    "Basic interactive terminal. Resume and side questions are not supported. CLI sign-in is not checked here."
+                }
+            ))
             .child(v_flex().gap_2()
                 .when(self.perf_layout == "modal-focus", |group| group.on_children_prepainted(modal_focus_smoke::measure("Agent launch arguments", 1)))
                 .child(div().text_sm().child("Arguments"))
