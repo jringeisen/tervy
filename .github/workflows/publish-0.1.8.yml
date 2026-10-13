@@ -1,0 +1,54 @@
+name: Publish Tervy 0.1.8 installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      download_url:
+        description: Temporary HTTPS URL for the notarized installer
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Download and verify notarized installer
+        env:
+          DOWNLOAD_URL: ${{ inputs.download_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$DOWNLOAD_URL" == https://*.ngrok-free.dev/* ]]
+          output="$RUNNER_TEMP/Tervy-0.1.8-macos-arm64.dmg"
+          part="$RUNNER_TEMP/tervy-download-part"
+          expected_size=14623896
+          chunk_size=524288
+          : > "$output"
+          for ((start=0; start<expected_size; start+=chunk_size)); do
+            end=$((start + chunk_size - 1))
+            if ((end >= expected_size)); then end=$((expected_size - 1)); fi
+            curl --fail --location --silent --show-error \
+              --retry 10 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 15 --max-time 120 \
+              -H 'ngrok-skip-browser-warning: 1' \
+              -H "Range: bytes=$start-$end" \
+              --output "$part" "$DOWNLOAD_URL"
+            actual_size=$(wc -c < "$part")
+            [[ "$actual_size" -eq $((end - start + 1)) ]]
+            cat "$part" >> "$output"
+          done
+          printf '%s  %s\n' \
+            d5c1279dcaec88a46c63e2bb1144f55f3196fd5bececa71661d05719190ad28a \
+            "$output" | sha256sum --check -
+      - name: Attach installer to draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: jringeisen/tervy
+        shell: bash
+        run: gh release upload v0.1.8 "$RUNNER_TEMP/Tervy-0.1.8-macos-arm64.dmg" --clobber
