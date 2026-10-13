@@ -14,7 +14,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:
@@ -26,23 +26,22 @@ jobs:
           set -euo pipefail
           [[ "$DOWNLOAD_URL" == https://*.ngrok-free.dev/* ]]
           output="$RUNNER_TEMP/Tervy-0.1.8-macos-arm64.dmg"
-          part="$RUNNER_TEMP/tervy-download-part"
           expected_size=14623896
-          chunk_size=524288
           : > "$output"
-          for ((start=0; start<expected_size; start+=chunk_size)); do
-            end=$((start + chunk_size - 1))
-            if ((end >= expected_size)); then end=$((expected_size - 1)); fi
-            curl --fail --location --silent --show-error \
-              --retry 10 --retry-all-errors --retry-delay 2 \
-              --connect-timeout 15 --max-time 120 \
+          for ((attempt=1; attempt<=200; attempt++)); do
+            current_size=$(wc -c < "$output")
+            echo "Attempt $attempt: $current_size / $expected_size bytes"
+            if [[ "$current_size" -eq "$expected_size" ]]; then break; fi
+            [[ "$current_size" -lt "$expected_size" ]]
+            curl --http1.1 --fail --location --silent --show-error \
+              --connect-timeout 15 --max-time 60 \
+              --speed-time 15 --speed-limit 1024 \
+              --continue-at - \
               -H 'ngrok-skip-browser-warning: 1' \
-              -H "Range: bytes=$start-$end" \
-              --output "$part" "$DOWNLOAD_URL"
-            actual_size=$(wc -c < "$part")
-            [[ "$actual_size" -eq $((end - start + 1)) ]]
-            cat "$part" >> "$output"
+              --output "$output" "$DOWNLOAD_URL" || true
+            sleep 2
           done
+          [[ "$(wc -c < "$output")" -eq "$expected_size" ]]
           printf '%s  %s\n' \
             d5c1279dcaec88a46c63e2bb1144f55f3196fd5bececa71661d05719190ad28a \
             "$output" | sha256sum --check -
