@@ -1424,8 +1424,9 @@ impl Workspace {
     }
     fn terminal_rows(&self, project: &str, window: &Window, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let selected_bg: Hsla = rgb(0x252b36).into();
-        let hover_bg: Hsla = rgb(0x1f232b).into();
+        let colors = SidebarColors::for_theme(theme);
+        let selected_bg = colors.selected;
+        let hover_bg = colors.hover;
         let add_project = project.to_string();
         let mut rows = v_flex().min_w_0().child(
             h_flex()
@@ -1439,14 +1440,14 @@ impl Workspace {
                     div()
                         .size(px(20.))
                         .rounded_md()
-                        .bg(rgb(0x2c323c))
+                        .bg(colors.section_icon_bg)
                         .flex()
                         .items_center()
                         .justify_center()
                         .child(
                             gpui_kit::component::Icon::new(IconName::SquareTerminal)
                                 .size(px(13.))
-                                .text_color(rgb(0xa3aab7)),
+                                .text_color(colors.muted),
                         ),
                 )
                 .child(div().flex_1().text_sm().font_semibold().child("Terminals"))
@@ -1489,7 +1490,7 @@ impl Workspace {
                     .child(self.sidebar_indicator(SidebarRow::Session(id), window, cx))
                     .ml(px(42.))
                     .border_l_1()
-                    .border_color(rgb(0x2c323c))
+                    .border_color(colors.border)
                     .px_2()
                     .h(px(30.))
                     .gap_1()
@@ -1540,7 +1541,7 @@ impl Workspace {
                                                 SessionStatus::Stopped
                                                     | SessionStatus::Exited { .. }
                                             ),
-                                            |label| label.text_color(rgb(0xa3aab7)),
+                                            |label| label.text_color(colors.muted),
                                         )
                                         .child(tab.info.name.clone()),
                                 ),
@@ -1595,8 +1596,9 @@ impl Workspace {
 
     fn agent_rows(&self, project: &str, window: &Window, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
-        let selected_bg: Hsla = rgb(0x252b36).into();
-        let hover_bg: Hsla = rgb(0x1f232b).into();
+        let colors = SidebarColors::for_theme(theme);
+        let selected_bg = colors.selected;
+        let hover_bg = colors.hover;
         let launch_project = project.to_string();
         let workspace = cx.weak_entity();
         let mut rows = v_flex().min_w_0().child(
@@ -1611,7 +1613,7 @@ impl Workspace {
                     div()
                         .size(px(20.))
                         .rounded_md()
-                        .bg(rgb(0x2c323c))
+                        .bg(colors.section_icon_bg)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1619,7 +1621,7 @@ impl Workspace {
                             gpui_kit::component::Icon::default()
                                 .data(include_bytes!("../../../assets/icons/sparkles.svg"))
                                 .size(px(13.))
-                                .text_color(rgb(0xa3aab7)),
+                                .text_color(colors.muted),
                         ),
                 )
                 .child(div().flex_1().text_sm().font_semibold().child("Agents"))
@@ -1747,7 +1749,7 @@ impl Workspace {
                     .child(self.sidebar_indicator(SidebarRow::Session(id), window, cx))
                     .ml(px(42.))
                     .border_l_1()
-                    .border_color(rgb(0x2c323c))
+                    .border_color(colors.border)
                     .px_2()
                     .h(px(30.))
                     .min_w_0()
@@ -1796,7 +1798,7 @@ impl Workspace {
                                     div()
                                         .min_w_0()
                                         .truncate()
-                                        .when(!running, |label| label.text_color(rgb(0xa3aab7)))
+                                        .when(!running, |label| label.text_color(colors.muted))
                                         .child(tab.info.name.clone()),
                                 ),
                             )
@@ -1809,7 +1811,7 @@ impl Workspace {
                             .flex_shrink_0()
                             .text_xs()
                             .font_family("IBM Plex Mono")
-                            .text_color(rgb(0xa3aab7))
+                            .text_color(colors.muted)
                             .child(status.to_lowercase()),
                     )
                     .child(
@@ -2949,6 +2951,55 @@ fn session_action(id: impl Into<ElementId>, label: &'static str) -> Button {
         .accessibility_label(label)
 }
 
+#[derive(Clone, Copy)]
+struct SidebarColors {
+    background: Hsla,
+    panel: Hsla,
+    hover: Hsla,
+    selected: Hsla,
+    border: Hsla,
+    foreground: Hsla,
+    muted: Hsla,
+    section_icon_bg: Hsla,
+    brand_bg: Hsla,
+    brand_foreground: Hsla,
+    badge_bg: Hsla,
+}
+
+impl SidebarColors {
+    fn for_theme(theme: &Theme) -> Self {
+        if theme.is_dark() {
+            Self {
+                background: rgb(0x16191f).into(),
+                panel: rgb(0x1b1f26).into(),
+                hover: rgb(0x1f232b).into(),
+                selected: rgb(0x252b36).into(),
+                border: rgb(0x2c323c).into(),
+                foreground: rgb(0xe4e7ec).into(),
+                muted: rgb(0xa3aab7).into(),
+                section_icon_bg: rgb(0x2c323c).into(),
+                brand_bg: rgb(0x29364c).into(),
+                brand_foreground: rgb(0x82a8f5).into(),
+                badge_bg: rgb(0x252a33).into(),
+            }
+        } else {
+            Self {
+                background: theme.sidebar,
+                panel: theme.background,
+                hover: theme.accent,
+                selected: theme.sidebar_accent,
+                border: theme.sidebar_border,
+                foreground: theme.sidebar_foreground,
+                muted: theme.muted_foreground,
+                section_icon_bg: theme.accent,
+                brand_bg: theme.sidebar_accent,
+                brand_foreground: theme.primary,
+                badge_bg: theme.accent,
+            }
+        }
+    }
+}
+
 /// Reveal controls with the row's hover group or keyboard focus.
 fn sidebar_actions(keyboard_selected: bool) -> Div {
     h_flex()
@@ -3028,13 +3079,14 @@ impl Render for Workspace {
         let fg = theme.foreground;
         let muted = theme.muted_foreground;
         let border = theme.border;
-        let active_bg: Hsla = rgb(0x252b36).into();
-        let sidebar_bg = rgb(0x16191f);
-        let sidebar_panel: Hsla = rgb(0x1b1f26).into();
-        let sidebar_hover: Hsla = rgb(0x1f232b).into();
-        let sidebar_border = rgb(0x2c323c);
-        let sidebar_text = rgb(0xe4e7ec);
-        let sidebar_muted = rgb(0xa3aab7);
+        let colors = SidebarColors::for_theme(theme);
+        let active_bg = colors.selected;
+        let sidebar_bg = colors.background;
+        let sidebar_panel = colors.panel;
+        let sidebar_hover = colors.hover;
+        let sidebar_border = colors.border;
+        let sidebar_text = colors.foreground;
+        let sidebar_muted = colors.muted;
         if self.perf_layout == "minimal" {
             return div().size_full().bg(bg).into_any_element();
         }
@@ -3085,7 +3137,7 @@ impl Render for Workspace {
                                 div()
                                     .size(px(30.))
                                     .rounded_md()
-                                    .bg(rgb(0x29364c))
+                                    .bg(colors.brand_bg)
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -3095,7 +3147,7 @@ impl Render for Workspace {
                                                 "../../../assets/brand/mark-ui.svg"
                                             ))
                                             .size(px(20.))
-                                            .text_color(rgb(0x82a8f5)),
+                                            .text_color(colors.brand_foreground),
                                     ),
                             )
                             .child(div().flex_1().text_base().font_semibold().child("Tervy"))
@@ -3292,6 +3344,7 @@ impl Render for Workspace {
                                             .flex_shrink_0()
                                             .rounded_md()
                                             .bg(rgb(project_tint))
+                                            .text_color(rgb(0xffffff))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -3428,7 +3481,7 @@ impl Render for Workspace {
                                 div()
                                     .size(px(20.))
                                     .rounded_md()
-                                    .bg(rgb(0x2c323c))
+                                    .bg(colors.section_icon_bg)
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -3438,7 +3491,7 @@ impl Render for Workspace {
                                                 "../../../assets/icons/layers.svg"
                                             ))
                                             .size(px(13.))
-                                            .text_color(rgb(0xa3aab7)),
+                                            .text_color(colors.muted),
                                     ),
                             )
                             .child(div().flex_1().text_sm().font_semibold().child("Processes"))
@@ -3949,7 +4002,7 @@ impl Render for Workspace {
                                     div()
                                         .rounded_md()
                                         .px_1()
-                                        .bg(rgb(0x252a33))
+                                        .bg(colors.badge_bg)
                                         .text_size(px(10.))
                                         .font_family("IBM Plex Mono")
                                         .text_color(sidebar_muted)

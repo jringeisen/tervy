@@ -4,7 +4,7 @@ members = ["crates/tervy-term", "crates/tervy-core", "crates/tervy-app"]
 default-members = ["crates/tervy-app"]
 
 [workspace.package]
-version = "0.1.7"
+version = "0.1.8"
 edition = "2024"
 license = "Apache-2.0"
 publish = false

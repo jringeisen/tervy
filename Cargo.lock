@@ -6792,7 +6792,7 @@ dependencies = [
 
 [[package]]
 name = "tervy-app"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "async-channel",
  "block2 0.6.2",
@@ -6810,7 +6810,7 @@ dependencies = [
 
 [[package]]
 name = "tervy-core"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "async-channel",
  "chrono",
@@ -6830,7 +6830,7 @@ dependencies = [
 
 [[package]]
 name = "tervy-term"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "alacritty_terminal",
  "async-channel",
