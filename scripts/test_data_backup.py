@@ -18,7 +18,7 @@ SCRIPT = Path(__file__).with_name("data-backup.py")
 def run_command(action, state, archive):
     return subprocess.run(
         [sys.executable, str(SCRIPT), action, str(archive)],
-        env={**os.environ, "DEVDESK_HOME": str(state)},
+        env={**os.environ, "TERVY_HOME": str(state), "TERVY_SKILLS_HOME": str(state.parent / "skills-home")},
         capture_output=True,
         text=True,
         check=False,
@@ -26,6 +26,50 @@ def run_command(action, state, archive):
 
 
 class DataBackupTests(unittest.TestCase):
+    def test_user_skills_round_trip_without_managed_entries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "state"
+            source.mkdir()
+            (source / "config.toml").write_text("theme = 'dark'\n")
+            home = root / "skills-home"
+            skill = home / ".claude/skills/review-code"
+            (skill / "references").mkdir(parents=True)
+            (skill / "SKILL.md").write_text("---\nname: review-code\ndescription: Review code\n---\n")
+            (skill / "references/checks.md").write_text("Check tests\n")
+            managed = home / ".codex/skills/.system/built-in"
+            managed.mkdir(parents=True)
+            (managed / "SKILL.md").write_text("managed")
+            archive = root / "backup.tar.gz"
+            self.assertEqual(run_command("backup", source, archive).returncode, 0)
+            with tarfile.open(archive, "r:gz") as bundle:
+                self.assertIn("Skills/claude/review-code/SKILL.md", bundle.getnames())
+                self.assertFalse(any("built-in" in name for name in bundle.getnames()))
+            import shutil
+            shutil.rmtree(skill)
+            target = root / "restored"
+            result = run_command("restore", target, archive)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((skill / "references/checks.md").read_text(), "Check tests\n")
+
+    def test_backup_reads_previous_state_before_first_launch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            previous = home / "Library/Application Support/DevDesk"
+            previous.mkdir(parents=True)
+            (previous / "config.toml").write_text("[settings]\nfont_size = 16\n")
+            archive = home / "backup.tar.gz"
+            environment = {**os.environ, "HOME": str(home)}
+            environment.pop("TERVY_HOME", None)
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "backup", str(archive)],
+                env=environment, capture_output=True, text=True, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with tarfile.open(archive, "r:gz") as source:
+                self.assertEqual(source.extractfile("Tervy/config.toml").read(), b"[settings]\nfont_size = 16\n")
+            self.assertFalse((home / "Library/Application Support/Tervy").exists())
+
     def test_round_trip_rebases_meeting_audio_into_empty_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -103,7 +147,7 @@ class DataBackupTests(unittest.TestCase):
                 header.size = len(metadata)
                 output.addfile(header, io.BytesIO(metadata))
                 payload = b"escape"
-                header = tarfile.TarInfo("DevDesk/../../escaped")
+                header = tarfile.TarInfo("Tervy/../../escaped")
                 header.size = len(payload)
                 output.addfile(header, io.BytesIO(payload))
             clean = root / "clean"

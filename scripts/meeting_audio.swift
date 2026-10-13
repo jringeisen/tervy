@@ -1,5 +1,6 @@
 // Native meeting audio worker. Screen frames are never received or saved.
 import AVFoundation
+import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 import Speech
@@ -80,8 +81,45 @@ final class CaptureDelegate: NSObject, SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) { failure?(error) }
 }
 
+func reportCaptureFailure(_ stage: String, _ error: Error) {
+    let nsError = error as NSError
+    let bundleID = Bundle.main.bundleIdentifier ?? "unknown"
+    let screenAccess = CGPreflightScreenCaptureAccess()
+    let microphoneAccess = AVCaptureDevice.authorizationStatus(for: .audio).rawValue
+    fputs("Capture diagnostics: stage=\(stage); bundle=\(bundleID); screenAccess=\(screenAccess); microphoneAccess=\(microphoneAccess); errorDomain=\(nsError.domain); errorCode=\(nsError.code)\n", stderr)
+}
+
+func authorizeMicrophone() async throws {
+    let initial = AVCaptureDevice.authorizationStatus(for: .audio)
+    var requested = false
+    switch initial {
+    case .authorized:
+        return
+    case .notDetermined:
+        requested = true
+        if await AVCaptureDevice.requestAccess(for: .audio) {
+            return
+        }
+    case .denied, .restricted:
+        break
+    @unknown default:
+        break
+    }
+    fputs("TERVY_MICROPHONE_PERMISSION_DENIED\n", stderr)
+    fputs("Microphone diagnostics: bundle=\(Bundle.main.bundleIdentifier ?? "unknown"); initial=\(initial.rawValue); final=\(AVCaptureDevice.authorizationStatus(for: .audio).rawValue); requested=\(requested)\n", stderr)
+    throw NSError(domain: "TervyMeeting", code: 12,
+                  userInfo: [NSLocalizedDescriptionKey: "Microphone access was denied"])
+}
+
 func record(systemURL: URL, microphoneURL: URL) async throws {
-    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    try await authorizeMicrophone()
+    let content: SCShareableContent
+    do {
+        content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+    } catch {
+        reportCaptureFailure("shareable-content", error)
+        throw error
+    }
     guard let display = content.displays.first else {
         throw NSError(domain: "TervyMeeting", code: 1, userInfo: [NSLocalizedDescriptionKey: "No display is available for system audio capture"])
     }
@@ -101,7 +139,12 @@ func record(systemURL: URL, microphoneURL: URL) async throws {
     let sampleQueue = DispatchQueue(label: "tervy.meeting-audio")
     try stream.addStreamOutput(delegate, type: .audio, sampleHandlerQueue: sampleQueue)
     try stream.addStreamOutput(delegate, type: .microphone, sampleHandlerQueue: sampleQueue)
-    try await stream.startCapture()
+    do {
+        try await stream.startCapture()
+    } catch {
+        reportCaptureFailure("start-capture", error)
+        throw error
+    }
     print("READY")
     fflush(stdout)
     _ = await withCheckedContinuation { continuation in
@@ -146,12 +189,14 @@ func transcribe(_ url: URL) async throws {
 @main struct MeetingAudio {
     static func main() async {
         let arguments = CommandLine.arguments
-        guard arguments.count >= 3 else {
-            fputs("Usage: meeting-audio record SYSTEM MIC | transcribe FILE\n", stderr)
+        guard arguments.count >= 2 else {
+            fputs("Usage: meeting-audio authorize | record SYSTEM MIC | transcribe FILE\n", stderr)
             exit(2)
         }
         do {
             switch arguments[1] {
+            case "authorize" where arguments.count == 2:
+                try await authorizeMicrophone()
             case "record" where arguments.count == 4:
                 try await record(systemURL: URL(fileURLWithPath: arguments[2]), microphoneURL: URL(fileURLWithPath: arguments[3]))
             case "transcribe" where arguments.count == 3:

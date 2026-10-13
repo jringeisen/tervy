@@ -13,7 +13,7 @@ and the license allowlist. The tests cover actual PTY output draining, direct
 signal inheritance, process-group SIGINT, immediate CPR/DA/kitty replies,
 recorded agent startup fixtures, key/mouse encoders, snapshot batching, the
 snapshot/wakeup race, UTF-16 boundaries, clipboard read denial and adversarial
-metadata bounds. `cargo run --release -p devdesk-core --example env_probe` finds
+metadata bounds. `cargo run --release -p tervy-core --example env_probe` finds
 this machine's nvm `npm` and Herd `php` with the actual cached resolver.
 
 🧪 Implemented tasks 1.1–1.16: explicit login-shell PTY; background, cached env
@@ -35,14 +35,14 @@ complete session sweeps, escalation, close/hide and quit confirmation.
 🧪 New evidence required small patches to the pinned Apache/MIT dependencies:
 unbounded combining marks, links and OSC payloads bypassed the scrollback cap.
 Limits, attribution and the exact registry diff are in
-[vendor/README.md](../vendor/README.md) and [vendor/devdesk.patch](../vendor/devdesk.patch).
+[vendor/README.md](../vendor/README.md) and [vendor/tervy.patch](../vendor/tervy.patch).
 Versions remain alacritty_terminal 0.26.0 and vte 0.15.0. No new license exception.
 
 🧪 Owner already verified basic typing and Option-e then e. The reported gap
 before é was fixed by retaining the font's fractional cell advance. This
 machine's startup `compinit` error came from a dangling Homebrew completion
 symlink; it was reversibly renamed to
-`/opt/homebrew/share/zsh/site-functions/.devdesk-disabled-brew-services`.
+`/opt/homebrew/share/zsh/site-functions/.tervy-disabled-brew-services`.
 Fresh login shells start cleanly. htop 3.5.3 and fzf 0.74.4 were installed for
 review; Homebrew's automatic cleanup reported a cache permission error, while
 both installed executables work.
@@ -54,9 +54,9 @@ Owner approved M1 after reviewing the running window. The original visual checkl
 - Drag-select; double-click a word; triple-click a line. Check Cmd-C and Cmd-V,
   including multi-line paste. Shift bypasses mouse reporting for selection.
 - Type é again, emoji and CJK; try an IME composition if configured. Check box
-  drawing and the existing prompt. `DEVDESK_FONT_FAMILY` can select an installed
+  drawing and the existing prompt. `TERVY_FONT_FAMILY` can select an installed
   Nerd Font; Menlo is the default, with CoreText fallback and cell-drawn common
-  box/powerline separators. `DEVDESK_OPTION_AS_META=1` opts out of Option accents.
+  box/powerline separators. `TERVY_OPTION_AS_META=1` opts out of Option accents.
 - Start `claude`, then `codex --no-daemon`. Check navigation, resize and
   Shift+Enter. Paste multiple lines into the agent input and confirm it remains
   an unsubmitted draft. The captured fixtures submit no model prompt.
@@ -68,7 +68,7 @@ printable `cat` output with queued input, and `seq 1 2000000`. It reports the
 view-init and PTY-spawn timing to first content paint for each CLI, without claiming authentication/readiness
 or validating every interactive screen. Physical keyboard delivery and display
 scanout are excluded from the latency samples. Agent subprocess memory is not
-included in DevDesk's own footprint measurements. The separate CLI tree sample
+included in Tervy's own footprint measurements. The separate CLI tree sample
 includes configured child processes and covers startup only; it is not a steady
 agent memory budget.
 

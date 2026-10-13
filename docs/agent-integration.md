@@ -1,10 +1,10 @@
-# DevDesk — Agent Integration
+# Tervy — Agent Integration
 
 The launch and read-only MCP details below describe the earlier milestones.
 The current Library integration adds a Tervy-owned MCP server to primary agents
 and gives Claude/Codex side conversations only its read tools. See
-[Library and Tervy MCP](prompts-mcp.md) for the current tool and permission
-contract.
+[Skills](skills-mcp.md) and [Notes](notes-mcp.md) for the current tools and
+permission contract.
 
 Status: **Proposed**. Evidence markers (✅ 🧪 📘 ❓) follow [technical-research.md](technical-research.md#how-to-read-this-document). Versions verified: Claude Code 2.1.295, codex-cli 0.161.0.
 
@@ -17,15 +17,15 @@ probes before relying on changed-version integration flags in M4–M6.
 
 ## 1. Integration strategy
 
-**DevDesk runs the official agent CLIs as interactive TUIs inside its own terminal panes.** It adds metadata around them but implements no agent logic:
+**Tervy runs the official agent CLIs as interactive TUIs inside its own terminal panes.** It adds metadata around them but implements no agent logic:
 
-| DevDesk adds | Mechanism |
+| Tervy adds | Mechanism |
 |---|---|
-| Stable session identity | Claude: `--session-id` chosen by DevDesk. Codex: thread ID captured from `notify` |
+| Stable session identity | Claude: `--session-id` chosen by Tervy. Codex: thread ID captured from `notify` |
 | Status (working / idle / needs approval / exited) | Claude: hooks injected via `--settings`. Codex: `notify` + BEL + input observation |
 | Resume | `claude --resume <id>` / `codex resume <id>` |
 | Side conversations | Native fork (`--fork-session` / `codex fork`) in a split pane with enforced read-only flags |
-| Lifecycle | The DevDesk supervisor owns the process (same as any terminal session) |
+| Lifecycle | The Tervy supervisor owns the process (same as any terminal session) |
 
 ### Options evaluated
 
@@ -42,7 +42,7 @@ probes before relying on changed-version integration flags in M4–M6.
 A provider is a **pure** translator. It builds launch specs and interprets signals. It **never spawns, owns or kills processes**; the supervisor does that identically for every session. This keeps providers small, unit-testable (golden-argument tests), and free of concurrency.
 
 ```rust
-// devdesk-core::agent (illustrative)
+// tervy-core::agent (illustrative)
 
 pub trait AgentProvider: Send + Sync {
     fn kind(&self) -> ProviderKind;                       // Claude | Codex
@@ -63,7 +63,7 @@ pub struct Capabilities {
 pub enum LaunchRequest {
     New { display_name: String },
     Resume { session_id: String },
-    ResumePicker,                            // CLI's own picker, for sessions DevDesk didn't start
+    ResumePicker,                            // CLI's own picker, for sessions Tervy didn't start
     Fork { parent_session_id: String, question: String },
 }
 
@@ -73,12 +73,12 @@ pub enum LaunchProfile { Primary, ReadOnlySide }
 
 pub struct LaunchContext {
     pub profile: LaunchProfile,              // derived from AgentRecord.role, never from the UI
-    pub agent_id: AgentId,                   // goes into DEVDESK_AGENT_ID
-    pub launch_id: LaunchId,                 // DEVDESK_LAUNCH_ID: rejects stale signals
-    pub hook_token: String,                  // DEVDESK_HOOK_TOKEN
+    pub agent_id: AgentId,                   // goes into TERVY_AGENT_ID
+    pub launch_id: LaunchId,                 // TERVY_LAUNCH_ID: rejects stale signals
+    pub hook_token: String,                  // TERVY_HOOK_TOKEN
     pub parent_model: Option<String>,        // passed to side forks (see §5.3)
     pub cwd: PathBuf,
-    pub helper: PathBuf,                     // absolute path to the DevDesk binary (hook helper)
+    pub helper: PathBuf,                     // absolute path to the Tervy binary (hook helper)
     pub parent_name: Option<String>,
     pub now: Timestamp,
 }
@@ -125,9 +125,9 @@ All variants put **options before positional arguments**, and use `--flag=value`
 | Resume picker | `claude --resume --settings <HOOKS_JSON>` (the ID is learned from `SessionStart`, `source=resume`) |
 | Fork (side) | see §5.3 |
 
-Environment: `DEVDESK_AGENT_ID=<uuid>`, `CLAUDE_CODE_NONBLOCKING_STDOUT=1` ✅ (a stalled pane can never freeze Claude), standard terminal vars.
+Environment: `TERVY_AGENT_ID=<uuid>`, `CLAUDE_CODE_NONBLOCKING_STDOUT=1` ✅ (a stalled pane can never freeze Claude), standard terminal vars.
 
-**User settings are respected.** DevDesk never modifies `~/.claude/settings.json` or project settings. Primary agents run with whatever permissions, model and MCP setup the user has.
+**User settings are respected.** Tervy never modifies `~/.claude/settings.json` or project settings. Primary agents run with whatever permissions, model and MCP setup the user has.
 
 ### 3.2 Hooks for status
 
@@ -136,7 +136,7 @@ Environment: `DEVDESK_AGENT_ID=<uuid>`, `CLAUDE_CODE_NONBLOCKING_STDOUT=1` ✅ (
 ```json
 {
   "hooks": {
-    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "'/Applications/DevDesk.app/Contents/MacOS/DevDesk' hook claude", "timeout": 5 }] }],
+    "SessionStart":      [{ "hooks": [{ "type": "command", "command": "'/Applications/Tervy.app/Contents/MacOS/tervy' hook claude", "timeout": 5 }] }],
     "UserPromptSubmit":  [{ "hooks": [{ "type": "command", "command": "…same…", "timeout": 5 }] }],
     "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "…same…", "timeout": 5 }] }],
     "PostToolUse":       [{ "hooks": [{ "type": "command", "command": "…same…", "timeout": 5 }] }],
@@ -167,9 +167,9 @@ Status is presented as **best-effort**. Before M4 sign-off, test these scenarios
 `PostToolUse` and the tool failure/denial hooks clear NeedsApproval when a pending call finishes. `PreToolUse` would double the per-call helper cost and add no information. Per-call cost is measured in M4 (target under 10 ms per helper run).
 
 **Hook helper contract** (critical: it must never slow down or break the agent):
-1. Read the payload from **stdin for Claude hooks**, or from the **last argv argument for Codex `notify`** (Codex passes JSON as argv and gives null stdin ✅). Read `DEVDESK_AGENT_ID`, `DEVDESK_LAUNCH_ID` and `DEVDESK_HOOK_TOKEN` from env.
-2. **Extract the small status fields first** (event name, session/thread ID, notification type), then send only those compact fields (at most 64 KiB); prompts, tool input/output and transcript paths are discarded. The stdin parser streams ignored fields, with a 200 ms read deadline and 64 MiB input ceiling, so a large ignored assistant message does not truncate a later session ID. Connect to `run/devdesk.sock` with a **200 ms connect and write deadline**. Write one line.
-3. **Always exit 0 and print nothing to stdout**, even if DevDesk is unreachable. Claude parses hook stdout as JSON for some events, and exit 2 blocks. The helper must never do either.
+1. Read the payload from **stdin for Claude hooks**, or from the **last argv argument for Codex `notify`** (Codex passes JSON as argv and gives null stdin ✅). Read `TERVY_AGENT_ID`, `TERVY_LAUNCH_ID` and `TERVY_HOOK_TOKEN` from env.
+2. **Extract the small status fields first** (event name, session/thread ID, notification type), then send only those compact fields (at most 64 KiB); prompts, tool input/output and transcript paths are discarded. The stdin parser streams ignored fields, with a 200 ms read deadline and 64 MiB input ceiling, so a large ignored assistant message does not truncate a later session ID. Connect to `run/tervy.sock` with a **200 ms connect and write deadline**. Write one line.
+3. **Always exit 0 and print nothing to stdout**, even if Tervy is unreachable. Claude parses hook stdout as JSON for some events, and exit 2 blocks. The helper must never do either.
 
 The helper is the main binary, which dispatches on `argv[1] == "hook"` **before** initialising GPUI, so its startup cost is a plain Rust process start (≈ms). 🧪 M4 warmed release helper p95 is below 10 ms; first invocation exceeds it. Measurements are in [perf/m4.json](../perf/m4.json).
 
@@ -189,20 +189,20 @@ with later tool events correcting it and PTY exit authoritative.
 
 ### 3.3 Sessions
 
-- **Identity:** DevDesk generates the UUID and passes `--session-id`, so the record is complete before the process starts.
-- **Discovery:** only DevDesk-launched sessions are listed (decision). For anything else, "Resume other Claude session…" runs `claude --resume` (the CLI's own picker) in a pane. When the user picks one, `SessionStart(source=resume)` reports its ID and DevDesk creates a record. Discovery works through a documented interface, with no file parsing.
+- **Identity:** Tervy generates the UUID and passes `--session-id`, so the record is complete before the process starts.
+- **Discovery:** only Tervy-launched sessions are listed (decision). For anything else, "Resume other Claude session…" runs `claude --resume` (the CLI's own picker) in a pane. When the user picks one, `SessionStart(source=resume)` reports its ID and Tervy creates a record. Discovery works through a documented interface, with no file parsing.
 - **The cwd invariant (correctness requirement, not a preference):** **Every Resume and Fork spawns with cwd = the record's stored `cwd`.**
   - 🧪 Resume *by ID* actually works from another directory in 2.1.295 (tested 2026-10-08: a fork launched from an unrelated directory succeeded).
   - But the resumed or forked agent's file tools, and `--restricted`'s confinement, apply to **its own cwd**. A side conversation launched elsewhere would read the wrong tree, or nothing.
   - Transcripts are stored per project directory ✅. The CLIs' resume and fork **pickers filter by cwd** (Claude ✅; Codex 📘, `--all` disables the filter).
-- **Persistence:** CLI-owned. Claude writes the transcript incrementally 🧪, so a session killed by DevDesk's stop or quit is resumable up to its last flushed message.
+- **Persistence:** CLI-owned. Claude writes the transcript incrementally 🧪, so a session killed by Tervy's stop or quit is resumable up to its last flushed message.
 - **Stop:** SIGTERM → process group, then SIGKILL after 3 s (architecture §6).
 
 ## 4. Codex integration
 
 ### 4.1 The daemon problem
 
-By default the Codex TUI attaches to a **shared app-server daemon** ✅. When the TUI exits, "any running work continues" ✅. A DevDesk "Stop" or quit would kill only the TUI and leave the turn running in a daemon shared with the user's other Codex terminals. **Every Codex argv DevDesk builds contains `--no-daemon`.** The agent then runs inside the TUI process in DevDesk's PTY, the session still persists for resume, and DevDesk never touches the user's daemon (never `codex app-server daemon stop`).
+By default the Codex TUI attaches to a **shared app-server daemon** ✅. When the TUI exits, "any running work continues" ✅. A Tervy "Stop" or quit would kill only the TUI and leave the turn running in a daemon shared with the user's other Codex terminals. **Every Codex argv Tervy builds contains `--no-daemon`.** The agent then runs inside the TUI process in Tervy's PTY, the session still persists for resume, and Tervy never touches the user's daemon (never `codex app-server daemon stop`).
 
 ### 4.2 Launch specs
 
@@ -225,18 +225,18 @@ Common flags (`CODEX_COMMON`):
 | Fork (side) | see §5.4 |
 
 Notes:
-- `notify` replaces any `notify` the user configured in `~/.codex/config.toml`. DevDesk reads that documented config key and, if set, the helper **chains** to the user's original notify command after reporting, passing the **unchanged** JSON as the last argv argument, exactly as Codex would. 🧪 M6 verifies this for Primary. Side does not chain user callbacks, which can write outside the model sandbox.
+- `notify` replaces any `notify` the user configured in `~/.codex/config.toml`. Tervy reads that documented config key and, if set, the helper **chains** to the user's original notify command after reporting, passing the **unchanged** JSON as the last argv argument, exactly as Codex would. 🧪 M6 verifies this for Primary. Side does not chain user callbacks, which can write outside the model sandbox.
 - These `-c` overrides also force embedded mode ✅, which makes `--no-daemon` belt-and-braces.
 
 ### 4.3 Status
 
-Codex hooks exist ✅, but hooks injected via `-c` are **untrusted and skipped** ✅. The only override is `--dangerously-bypass-hook-trust`, which also trusts every untrusted **repo** hook. **Rejected** (ADR-023). DevDesk combines three signals instead:
+Codex hooks exist ✅, but hooks injected via `-c` are **untrusted and skipped** ✅. The only override is `--dangerously-bypass-hook-trust`, which also trusts every untrusted **repo** hook. **Rejected** (ADR-023). Tervy combines three signals instead:
 
 | Signal | Source | → AgentUpdate |
 |---|---|---|
 | `notify` payload, `type: agent-turn-complete` ✅ | helper → socket | Matching visible-thread ID + `Idle` |
 | `Event::Bell` in the Codex pane | `tui.notifications=["approval-requested"]` with `method="bel"` ✅ | `Attention` (cleared by any input) |
-| Enter pressed in the pane | DevDesk is the terminal | `ActiveInferred` (cleared by notify, or 10 min without PTY output) |
+| Enter pressed in the pane | Tervy is the terminal | `ActiveInferred` (cleared by notify, or 10 min without PTY output) |
 | PTY child exit | supervisor | `Exited(code)` |
 
 Fidelity is **meaningfully lower** than Claude's, and the UI must say so rather than fake precision:
@@ -261,7 +261,7 @@ So Codex agents show **"Attention"** (BEL seen; cleared by any input in the pane
 ### 4.5 Terminal compatibility requirements (both CLIs)
 
 The embedded terminal **must**:
-- Answer **CPR, DA1, OSC 10/11 colour queries and `ESC[?u`** (kitty keyboard query). Codex waits up to **250 ms** for these on every launch ✅. alacritty_terminal surfaces CPR/DA as `Event::PtyWrite` and OSC 10/11 as `Event::ColorRequest`, which DevDesk must write back.
+- Answer **CPR, DA1, OSC 10/11 colour queries and `ESC[?u`** (kitty keyboard query). Codex waits up to **250 ms** for these on every launch ✅. alacritty_terminal surfaces CPR/DA as `Event::PtyWrite` and OSC 10/11 as `Event::ColorRequest`, which Tervy must write back.
 - Encode keys with the **kitty keyboard protocol** when the app enables it (Shift+Enter in both CLIs ✅).
 - Support bracketed paste, focus events (`?1004`), mouse reporting, alternate screen, OSC 8 hyperlinks and truecolor.
 
@@ -277,7 +277,7 @@ Ask about a running agent's work without interrupting it. The side conversation 
 
 | | **A. Native fork** (recommended) | **B. Read-only question agent with selected context** (fallback) |
 |---|---|---|
-| Context | The **entire** parent conversation up to the fork moment, including reasoning visible in the transcript | Only what DevDesk can extract **through documented channels**: Claude's `Stop` hook `last_assistant_message` ✅, `git diff`, user-selected scrollback text |
+| Context | The **entire** parent conversation up to the fork moment, including reasoning visible in the transcript | Only what Tervy can extract **through documented channels**: Claude's `Stop` hook `last_assistant_message` ✅, `git diff`, user-selected scrollback text |
 | Mechanism | `claude --resume <id> --fork-session` 🧪 / `codex fork <id>` 🧪 | `claude --tools Read,Grep,Glob …` (fresh session) with an assembled context prompt |
 | Parent interrupted? | **No** 🧪 (both CLIs: the parent finished its task normally while the fork ran) | No (independent) |
 | Answers "why did you choose X?" | **Yes.** The fork sees the parent's actual reasoning | Poorly. It reconstructs reasons from code and the last message |
@@ -288,7 +288,7 @@ Ask about a running agent's work without interrupting it. The side conversation 
 
 ### 5.3 Claude side conversation
 
-UX: in an agent pane, press **Cmd-Shift-A** (or choose "Ask Agent Question" in the palette). A one-line input appears for the question. DevDesk opens a **split pane** to the right and launches:
+UX: in an agent pane, press **Cmd-Shift-A** (or choose "Ask Agent Question" in the palette). A one-line input appears for the question. Tervy opens a **split pane** to the right and launches:
 
 ```
 claude --resume <parent-session-id> --fork-session
@@ -320,7 +320,7 @@ claude --resume <parent-session-id> --fork-session
 
 **Account tools:** 🧪 M5 interactive argv accepts an explicit `ShareOnboardingGuide` entry in `--disallowedTools`; production forks now always include it. 📘 The named deny flag removes that tool, while `--disable-slash-commands` removes Skill and strict MCP excludes external servers. No account tool was invoked. ❓ The interactive tool registry cannot be independently enumerated through a documented CLI interface; model self-reports are not proof that all future account tools are absent.
 
-🧪 DevDesk persists the question as its sidebar display name, parent identity and snapshot time. It does not rename the parent's CLI conversation. Side history restores closed; Resume targets its captured fork ID and reapplies every read-only flag. M4 records remain compatible through defaulted JSON fields. ❓ The current documented hook projection does not capture the parent's model, so model inheritance cannot be guaranteed under `--restricted`. OAuth is verified here; other provider/auth configurations remain untested.
+🧪 Tervy persists the question as its sidebar display name, parent identity and snapshot time. It does not rename the parent's CLI conversation. Side history restores closed; Resume targets its captured fork ID and reapplies every read-only flag. M4 records remain compatible through defaulted JSON fields. ❓ The current documented hook projection does not capture the parent's model, so model inheritance cannot be guaranteed under `--restricted`. OAuth is verified here; other provider/auth configurations remain untested.
 
 ### 5.4 Codex side conversation
 
@@ -339,12 +339,12 @@ codex fork <parent-thread-id> --no-daemon -s read-only -a never
 - **`-s` sandboxes only model-generated shell commands** 📘. MCP servers and plugins are separate processes and integrations **outside** that sandbox.
   - 🧪 (test C1): this user's config enables `node_repl` (runs JavaScript), `computer-use`, `solo`, `youtrack`, `vault_mcp` and several plugins. In a fork with only `sandbox_mode="read-only"`, `mcp__node_repl__js` was **available**. The model declined to use it, but that is prompt behaviour, not enforcement.
   - 🧪 (test C2): with every configured server disabled via `-c mcp_servers.<name>.enabled=false` plus the `--disable` features above, the fork's tool registry showed **no `mcp__*` tools**.
-  - 🧪 DevDesk enumerates user/CODEX_HOME config, selected profile, `/etc/codex/config.toml` when present, and project ancestor layers to the Git root. Read/parse failures, oversized inputs and names that cannot safely be addressed by CLI overrides refuse Side launch. 0.162.0 treats quotes in dotted key paths literally; unquoted ordinary server names are used. This machine has `herd` and `laravel-boost`; tests substitute local synthetic servers.
+  - 🧪 Tervy enumerates user/CODEX_HOME config, selected profile, `/etc/codex/config.toml` when present, and project ancestor layers to the Git root. Read/parse failures, oversized inputs and names that cannot safely be addressed by CLI overrides refuse Side launch. 0.162.0 treats quotes in dotted key paths literally; unquoted ordinary server names are used. This machine has `herd` and `laravel-boost`; tests substitute local synthetic servers.
 - Remaining tools after C2: `exec_command`/`write_stdin` (sandboxed shell), `apply_patch` (🧪 C3: **rejected** under read-only + `approval_policy="never"`: `patch rejected: writing is blocked by read-only sandbox`), `web__run` (web search, read-only), `collaboration.*` (historical C2 result; M6 disables these with `agents.enabled=false`, and the model reports none available), `view_image`, goals.
 - `-s read-only` → macOS Seatbelt. Shell writes fail at the OS level 🧪 (`touch: Operation not permitted`). Network is off for shell commands ✅.
 - `-a never` → no approval prompts; failures go back to the model 📘.
 - 🧪 M6 also disables built-in worktree tools, which appeared as `mcp__codex_worktrees__` despite external-server/plugin disabling. Hooks and workspace dependencies are disabled; Side never chains the user's original notify callback.
-- `--no-daemon` → the fork lives in DevDesk's PTY; the descendant-session sweep also stops its tool jobs. Without it, `-s`/`-a` do not force embedded mode ✅, and the fork would join the shared daemon.
+- `--no-daemon` → the fork lives in Tervy's PTY; the descendant-session sweep also stops its tool jobs. Without it, `-s`/`-a` do not force embedded mode ✅, and the fork would join the shared daemon.
 - **Asymmetry (accepted):** Codex's read-only sandbox still allows *reading* shell commands (`git diff`, `git log`) 🧪. Claude's side conversation has no shell. Making Claude Bash read-only needs sandbox + allowlist work that isn't verified (see open-questions).
 
 ### 5.5 The observer preamble (accuracy, not security)
@@ -363,7 +363,7 @@ This improves answer accuracy. **Security comes only from the flags.** If the mo
 |---|---|
 | Can sessions be forked programmatically? | **Yes**, both CLIs 🧪 |
 | Can a *running* session be forked safely? | **Yes** 🧪. Separate session/thread ID, separate file, no lock errors, parent unaffected |
-| How are session IDs obtained? | Claude: DevDesk assigns them (`--session-id`); fork IDs via `SessionStart(source=fork)` 🧪. Codex: `notify` `thread-id` ✅ |
+| How are session IDs obtained? | Claude: Tervy assigns them (`--session-id`); fork IDs via `SessionStart(source=fork)` 🧪. Codex: `notify` `thread-id` ✅ |
 | Does the parent continue uninterrupted? | **Yes** 🧪 (both finished their task normally during the fork) |
 | What context is in the fork? | Everything the parent had **persisted** at fork time. A turn still streaming may be partly missing ❓. In-flight tool calls appear aborted 🧪 |
 | How do snapshots behave? | **Point-in-time copy.** Later parent progress is invisible. To refresh, ask again (a new fork) |
@@ -375,7 +375,7 @@ This improves answer accuracy. **Security comes only from the flags.** If the mo
 ```mermaid
 sequenceDiagram
     actor U as User
-    participant UI as DevDesk UI
+    participant UI as Tervy UI
     participant S as Supervisor
     participant P as Parent agent (running)
     participant F as Fork (split pane)
@@ -401,7 +401,7 @@ Side conversations are listed under their parent and can be resumed (same read-o
 | CLI not installed / not on login-shell PATH | `check_installed` at first use | Agent actions are disabled, with "claude not found on PATH (login shell)" |
 | CLI older than the supported minimum | `--version` parse | Warning banner. Launch still allowed (flags may fail) |
 | Resume target missing (deleted, other machine) | Process exits quickly with an error in the pane | Record marked `unresumable`; the pane output stays visible |
-| Hook helper can't reach DevDesk | Helper connect timeout | Helper exits 0 silently. The agent is unaffected; status may go stale |
+| Hook helper can't reach Tervy | Helper connect timeout | Helper exits 0 silently. The agent is unaffected; status may go stale |
 | Status stale (missed hook) | — | Process exit is always authoritative. Any later hook corrects the state |
 | Fork requested before Codex thread ID known | Capability check | "Ask Question" disabled with the reason |
 | Fork flags rejected by a future CLI | Fork exits non-zero within 2 s | Error shown in the pane. `scripts/cli-probe.sh` is the early warning |
@@ -410,8 +410,8 @@ Side conversations are listed under their parent and can be resumed (same read-o
 
 ### 6.6 Upgrade paths (not MVP)
 
-- **Codex status via app-server:** DevDesk runs its own `codex app-server --listen unix://<app-support>/codex.sock`, launches TUIs with `--remote unix://…`, and subscribes to `thread/status/changed` (`waitingOnApproval`, `waitingOnUserInput`) ✅. Adopt once the protocol loses its experimental label, or if the BEL heuristic proves unreliable.
-- **Agents that outlive DevDesk:** Claude's `--bg` / `claude agents` supervisor ✅ (research preview) could host primary agents, with DevDesk attaching via `claude attach`. Revisit only if the "stop on quit" decision changes.
+- **Codex status via app-server:** Tervy runs its own `codex app-server --listen unix://<app-support>/codex.sock`, launches TUIs with `--remote unix://…`, and subscribes to `thread/status/changed` (`waitingOnApproval`, `waitingOnUserInput`) ✅. Adopt once the protocol loses its experimental label, or if the BEL heuristic proves unreliable.
+- **Agents that outlive Tervy:** Claude's `--bg` / `claude agents` supervisor ✅ (research preview) could host primary agents, with Tervy attaching via `claude attach`. Revisit only if the "stop on quit" decision changes.
 
 ## 7. Limitations and risks
 

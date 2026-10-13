@@ -1,4 +1,4 @@
-# DevDesk — Technical Research
+# Tervy — Technical Research
 
 Research date: **2026-10-08**. Original research machine: Apple Silicon (arm64), macOS 27.0.1, Command Line Tools only (no full Xcode), Rust initially not installed. Agent CLIs tested there: **Claude Code 2.1.295**, **codex-cli 0.161.0**. Those probes describe the old machine; migration verification is recorded in §10b below.
 
@@ -36,7 +36,7 @@ Unverified claims also appear in [§13 Assumptions register](#13-assumptions-reg
 
 The brief rules out Electron and web front ends. The realistic native-Rust options:
 
-| Framework | Rendering | Fit for DevDesk | Notes |
+| Framework | Rendering | Fit for Tervy | Notes |
 |---|---|---|---|
 | **GPUI** (Zed) | GPU (Metal on macOS) | **Best.** Built for exactly this workload: a text-dense UI with a terminal (Zed's own terminal) | Pre-1.0, frequent breaking changes, sparse docs |
 | egui | Immediate mode, GPU | Acceptable | Redraws every frame while animating. Harder to reach near-zero idle CPU and native feel; text shaping is less sophisticated |
@@ -62,7 +62,7 @@ The brief rules out Electron and web front ends. The realistic native-Rust optio
 
 - ✅ **`gpui-component` 0.7.1** (2026-10-05), in the `longbridge/gpui-kit` repo, Apache-2.0, released weekly. It provides `input`, `list`, `virtual_list`, `command`, `searchable_list`, `select`, `tab`, `resizable`, `dock`, `theme`, `sidebar`, `menu`, `notification` and `title_bar`. — https://crates.io/crates/gpui-component, https://github.com/longbridge/gpui-kit/tree/main/crates/component/src
 - ✅ It **pins `gpui-pre` with an exact `=` requirement** (enforced in CI). Choosing gpui-component therefore also chooses the GPUI source.
-- **Why it matters:** DevDesk needs a text input (command palette, rename), a filtered list (palette), tabs and a resizable split. GPUI ships only primitives. Building a text input with IME, selection and clipboard from scratch is a multi-week detour. gpui-component removes that work.
+- **Why it matters:** Tervy needs a text input (command palette, rename), a filtered list (palette), tabs and a resizable split. GPUI ships only primitives. Building a text input with IME, selection and clipboard from scratch is a multi-week detour. gpui-component removes that work.
 
 ### Build toolchain
 
@@ -97,11 +97,11 @@ GPUI is production-grade as a renderer (Zed ships on it) and immature as a libra
   - calls `setsid()` and sets the PTY as controlling terminal (`TIOCSCTTY`), so **child pid == process group id == session id**;
   - `Pty::child()` exposes the `std::process::Child`;
   - on drop it sends **`SIGHUP` to the child pid only** (not the group);
-  - **on macOS, with no shell specified it launches via `/usr/bin/login -flp`**. DevDesk must always pass an explicit program.
+  - **on macOS, with no shell specified it launches via `/usr/bin/login -flp`**. Tervy must always pass an explicit program.
 - `EventLoop::new(...).spawn()`: **one OS thread per PTY**, 1 MiB read buffer. Write, resize and shutdown go through `Notifier` / `Msg`. ✅ `EventLoop::new` takes an existing `Arc<FairMutex<Term>>` (so a restart can reattach to the same grid) and **consumes** the PTY. It emits `ChildExit` *before* draining remaining output, then `Exit` (https://docs.rs/alacritty_terminal/latest/alacritty_terminal/event_loop/struct.EventLoop.html).
-- Events DevDesk **must handle**: `Wakeup` (redraw), `PtyWrite(String)` (terminal replies to queries such as cursor position (CPR) and device attributes (DA), which must be written back to the PTY), `ColorRequest` (OSC 10/11 queries, which DevDesk must answer), `Title`, `Bell`, `ClipboardStore/Load` (OSC 52), `ChildExit(ExitStatus)` (0.26+), `Exit`.
+- Events Tervy **must handle**: `Wakeup` (redraw), `PtyWrite(String)` (terminal replies to queries such as cursor position (CPR) and device attributes (DA), which must be written back to the PTY), `ColorRequest` (OSC 10/11 queries, which Tervy must answer), `Title`, `Bell`, `ClipboardStore/Load` (OSC 52), `ChildExit(ExitStatus)` (0.26+), `Exit`.
 - ✅ **Breaking changes in minor versions are normal** (the CHANGELOG bolds them; 0.26 changed `ChildExit`, 0.25 replaced `hold`). Pin `=0.26.0`.
-- ✅ Zed uses a **fork** (zed-industries/alacritty) that adds `SignalMask` handling. ❓ Rust's `std::process` resets SIGPIPE and the signal mask in children, so DevDesk may not need this. **M1 test:** confirm children start with default signal dispositions.
+- ✅ Zed uses a **fork** (zed-industries/alacritty) that adds `SignalMask` handling. ❓ Rust's `std::process` resets SIGPIPE and the signal mask in children, so Tervy may not need this. **M1 test:** confirm children start with default signal dispositions.
 - ✅ **Key encoding is not part of `alacritty_terminal`.** Translating key presses to bytes (including the **kitty keyboard protocol**, which both agent TUIs use for Shift+Enter) is front-end work. Permissive references:
   - the `alacritty` binary crate (**Apache-2.0** ✅, 0.17.0), `input/keyboard.rs`;
   - `gpui-terminal` (MIT OR Apache-2.0 ✅).
@@ -119,7 +119,7 @@ GPUI is production-grade as a renderer (Zed ships on it) and immature as a libra
 
 - ✅ `portable-pty` 0.9.0. Last crates.io release 2025-02-11; still gets commits in the wezterm repo. MIT. It also calls `setsid` + `TIOCSCTTY`, and its `kill()` sends SIGHUP to the pid only.
 - Since `alacritty_terminal` already ships a PTY spawner and reader loop wired into its `Term`, **portable-pty adds a second layer with no gain.** Dropped.
-- ✅ **Neither library kills the whole process tree.** DevDesk must do it itself:
+- ✅ **Neither library kills the whole process tree.** Tervy must do it itself:
   - `killpg(pgid, SIG)`. This works because pgid == child pid after `setsid`.
   - For interactive shells, the shell's job control puts jobs in **other** process groups within the same session. Shutting down needs the foreground group (`tcgetpgrp` on the PTY), plus SIGHUP to the shell (which forwards it to its jobs), plus a final sweep of processes in that session id. ❓ The macOS session-member enumeration API (`proc_listallpids` + `proc_pidinfo`) is to be confirmed in M3.
 
@@ -128,7 +128,7 @@ GPUI is production-grade as a renderer (Zed ships on it) and immature as a libra
 - ✅ GPUI ships its own `ForegroundExecutor` (main thread) and `BackgroundExecutor` (thread pool).
 - ✅ Zed uses Tokio **only** through `gpui_tokio` (Apache-2.0): a separate 2-worker runtime. Source comment: "Since we now have two executors, let's try to keep our footprint small". — https://github.com/zed-industries/zed/blob/main/crates/gpui_tokio/src/gpui_tokio.rs
 - ✅ Zed uses `smol` / `async-process` for subprocesses.
-- **What DevDesk needs async for:**
+- **What Tervy needs async for:**
   - PTY reading: alacritty's own thread.
   - Child exit: the alacritty `ChildExit` event.
   - Timers (stop grace periods, restart backoff): a channel-receive deadline.
@@ -156,21 +156,21 @@ Migrations: a hand-rolled `PRAGMA user_version` + ordered SQL scripts (≈30 lin
 Docs base: https://code.claude.com/docs/en/ (pages: `cli-reference`, `hooks`, `sessions`, `permissions`, `permission-modes`, `sandboxing`, `settings`, `env-vars`, `terminal-config`, `agent-view`, `agent-sdk/sessions`).
 
 ### Session identity and lifecycle
-- 📘✅ `--session-id <uuid>` makes **DevDesk choose the ID before launch**, so no discovery is needed.
-- 📘✅ `--resume <id>` / `-r` resumes. With no ID it opens an interactive picker, which gives free access to sessions not started in DevDesk.
+- 📘✅ `--session-id <uuid>` makes **Tervy choose the ID before launch**, so no discovery is needed.
+- 📘✅ `--resume <id>` / `-r` resumes. With no ID it opens an interactive picker, which gives free access to sessions not started in Tervy.
 - 📘✅🧪 `--fork-session` (with `--resume`) creates a new session ID from the resumed history.
 - 🧪 **Forking a *running* session works.** The parent kept running and finished normally; the fork got a new ID and had the parent's context (Appendix A, test A2).
 - 🧪 **Caveat:** the fork's snapshot showed the parent's **in-flight tool call as stopped**. The fork told the user the parent's `sleep` "was stopped before it finished", which was false.
-- ✅ Transcripts are stored at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. The **path** is documented, but the **format** is documented as internal and subject to change. **DevDesk will not parse transcripts.**
+- ✅ Transcripts are stored at `~/.claude/projects/<encoded-cwd>/<session-id>.jsonl`. The **path** is documented, but the **format** is documented as internal and subject to change. **Tervy will not parse transcripts.**
 - ✅ **Resume does not restore** `--settings`, `--mcp-config`, `--add-dir` and similar flags. They must be passed again on every resume or fork.
 
 ### Hooks (status tracking)
 - ✅ 33 hook events. Relevant ones: `SessionStart` (`source`: startup | resume | clear | compact | fork), `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, **`PermissionRequest`** (dedicated needs-approval signal), `Notification` (`notification_type`: `permission_prompt` ≈6 s, `idle_prompt` ≈60 s, `agent_needs_input`, …), `Stop`, `SessionEnd`.
 - ✅ Common input fields: `session_id`, `transcript_path`, `cwd`, `hook_event_name`.
 - 🧪 **Hooks passed as an inline JSON string via `--settings` run**, and every event carries the correct `session_id` (Appendix A, test A5).
-- 🧪 A forked session's `SessionStart` fires with **`source: "fork"` and the new session ID**. This is how DevDesk learns fork IDs (test A6).
+- 🧪 A forked session's `SessionStart` fires with **`source: "fork"` and the new session ID**. This is how Tervy learns fork IDs (test A6).
 - ✅ `--settings` overrides matching keys, and array settings merge. ❓ Whether `--settings` hooks *add to* the user's own `~/.claude/settings.json` hooks (expected) rather than replacing them: to be checked with a probe in M4.
-- ✅ Handler types: `command`, `http`, `mcp_tool`, `prompt`, `agent`. DevDesk uses `command`, pointing at its own helper, which writes to a Unix socket.
+- ✅ Handler types: `command`, `http`, `mcp_tool`, `prompt`, `agent`. Tervy uses `command`, pointing at its own helper, which writes to a Unix socket.
 
 ### Permission enforcement
 - 📘✅ `--tools <list>` limits which **built-in** tools exist. It does **not** affect MCP tools.
@@ -211,13 +211,13 @@ Docs: https://developers.openai.com/codex/* (now redirects to https://learn.chat
 - 📘 Feature `daemon_auto_start` is stable and on. The TUI attaches to a shared, detached **app-server daemon**.
 - ✅ When the TUI exits it prints "Disconnected from this task. Any running work continues." **Killing the TUI does not stop the agent's turn.**
 - ✅ `-s` and `-a` **do not** force in-process (embedded) mode. Most `-c` overrides and `--no-daemon` **do**.
-- **Consequence:** under DevDesk's stop-on-quit model, **every Codex invocation DevDesk builds (start, resume, fork) must pass `--no-daemon`**. Otherwise "Stop" leaves work running in a daemon that's shared with the user's other Codex terminals. Never call `codex app-server daemon stop`.
+- **Consequence:** under Tervy's stop-on-quit model, **every Codex invocation Tervy builds (start, resume, fork) must pass `--no-daemon`**. Otherwise "Stop" leaves work running in a daemon that's shared with the user's other Codex terminals. Never call `codex app-server daemon stop`.
 
 ### Status signals
 - ✅ Hooks exist (SessionStart, UserPromptSubmit, PermissionRequest, Stop, Interrupt, SessionEnd, …), but non-managed hooks only run when their hash is **trusted**. Hooks injected through `-c` show as untrusted and are **skipped**. `--dangerously-bypass-hook-trust` trusts **all** non-managed hooks, including untrusted repo hooks. **Rejected as a default.**
 - ✅ Legacy `notify`: `-c notify='["<helper>"]'` runs with **no trust check**. Its payload is `type: "agent-turn-complete"`, `thread-id`, `turn-id`, `cwd`, `last-assistant-message`. It is the **only** notify type (no approval event).
 - ✅ TUI notifications: `tui.notifications` (`agent-turn-complete`, `approval-requested`, …), `tui.notification_method` (`osc9` | `bel` | `auto`), `tui.notification_condition` (`unfocused` | `always`).
-- **Assembled design:** `notify` (turn done + thread ID) + `tui.notifications=["approval-requested"]` with `method="bel"`, `condition="always"`. alacritty_terminal emits `Event::Bell`, so in a Codex pane **BEL means needs-approval**. "Working" = the user pressed Enter in the pane (DevDesk is the terminal, so it sees the input). ❓ Verify in M6.
+- **Assembled design:** `notify` (turn done + thread ID) + `tui.notifications=["approval-requested"]` with `method="bel"`, `condition="always"`. alacritty_terminal emits `Event::Bell`, so in a Codex pane **BEL means needs-approval**. "Working" = the user pressed Enter in the pane (Tervy is the terminal, so it sees the input). ❓ Verify in M6.
 
 ### Sandbox
 - ✅🧪 On macOS, `read-only` uses Seatbelt (`sandbox-exec`). Writes fail with `Operation not permitted` at the OS level (test B1). Network is off by default in read-only.
@@ -227,7 +227,7 @@ Docs: https://developers.openai.com/codex/* (now redirects to https://learn.chat
 ### App-server protocol
 - ✅ JSON-RPC over stdio, Unix socket or WebSocket. Offers `thread/start|resume|fork|list`, `turn/start|interrupt`, approval requests, and `thread/status/changed` (`idle`, `active` + `waitingOnApproval` | `waitingOnUserInput`). This is the **richest** status source.
 - ✅ Labelled **experimental** ("not supported for production workloads"), although OpenAI's own TUI is an app-server client.
-- **Deferred:** a later option is for DevDesk to run its own `codex app-server --listen unix://…`, point the TUI at it with `--remote`, and read status from its own connection.
+- **Deferred:** a later option is for Tervy to run its own `codex app-server --listen unix://…`, point the TUI at it with `--remote`, and read status from its own connection.
 
 ### Terminal requirements (✅ from codex-rs source)
 - The startup probe sends CPR (`ESC[6n`), OSC 10/11 colour queries, `ESC[?u` and DA1, with a **250 ms timeout**. **An embedded terminal that doesn't answer makes every launch stall.**
@@ -237,7 +237,7 @@ Docs: https://developers.openai.com/codex/* (now redirects to https://learn.chat
 
 | Crate | Version | License | Use |
 |---|---|---|---|
-| `toml` / `toml_edit` | current | MIT/Apache | Parse config; `toml_edit` preserves the user's comments when DevDesk adds a project |
+| `toml` / `toml_edit` | current | MIT/Apache | Parse config; `toml_edit` preserves the user's comments when Tervy adds a project |
 | `serde` | current | MIT/Apache | (De)serialisation |
 | `notify` | 8.2.0 ✅ | CC0-1.0 ✅ | Watch `config.toml` for hot reload |
 | `async-channel` | current | MIT/Apache | Core→UI events (blocking send, async receive) |
@@ -249,7 +249,7 @@ YAML rejected: no stable Rust YAML stack (`serde_yaml` is unmaintained) and inde
 
 ## 10a. M0 build record (2026-10-08)
 
-The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `alacritty_terminal = "=0.26.0"`, edition 2024, rustc 1.99.0). Platform setup is in `crates/devdesk-app/src/main.rs`:
+The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `alacritty_terminal = "=0.26.0"`, edition 2024, rustc 1.99.0). Platform setup is in `crates/tervy-app/src/main.rs`:
 - `gpui_kit::application().with_assets(Assets)` → `on_reopen` → `run(init, menus/keys, open_window, activate)`.
 - Imports go through the facade only: `gpui_kit::*`, `gpui_kit::component`, `gpui_kit::base::StyledExt`.
 - `gpui_kit::actions!` replaces `gpui::actions!` (lib.rs says the upstream derive path doesn't resolve through the facade).
@@ -280,7 +280,7 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
   🧪 `/etc/zprofile` still invokes `path_helper`. ADR-026's environment resolution remains appropriate; login-only resolves different tools here.
 - ❓ Agent CLI versions and flag behavior have not been re-verified on the replacement machine. Re-run the applicable Appendix A probes before relying on their behavior in agent integration milestones. Codex MCP configuration enumeration remains an M6 task.
 - 🧪 Locally rebuilt release baseline (`perf/baseline.json`): ten startup runs, p50 **169.9 ms**, p95 **473.2 ms** (first run **473.2 ms**, included in both percentiles). Startup meets the 500 ms p50 budget. Sequential launches do not flush macOS/Metal caches.
-- 🧪 Empty release window after 10 s settle, with no managed children or build activity: **61 MB** footprint and **0.553%** mean CPU over 30 sample intervals (**33 s** wall time). Memory and CPU exceed the 60 MB / 0.3% budgets. `top -l 31 -s 1 -pid <pid> -stats cpu,idlew` reported a cumulative idle-wakeup counter from **7 to 33**: **26 / 33 s = 0.788 wakeups/s**. A separate `top -d` probe confirmed delta counting. The default `IDLEW` column must not be averaged as a rate. ❓ The old machine's reported ~76 wakeups/s cannot be validated without its raw samples, and process idle wakeups alone cannot attribute DevDesk timers vs GPUI/OS activity. A11 investigation still starts M1; no performance fix has been made in M0.
+- 🧪 Empty release window after 10 s settle, with no managed children or build activity: **61 MB** footprint and **0.553%** mean CPU over 30 sample intervals (**33 s** wall time). Memory and CPU exceed the 60 MB / 0.3% budgets. `top -l 31 -s 1 -pid <pid> -stats cpu,idlew` reported a cumulative idle-wakeup counter from **7 to 33**: **26 / 33 s = 0.788 wakeups/s**. A separate `top -d` probe confirmed delta counting. The default `IDLEW` column must not be averaged as a rate. ❓ The old machine's reported ~76 wakeups/s cannot be validated without its raw samples, and process idle wakeups alone cannot attribute Tervy timers vs GPUI/OS activity. A11 investigation still starts M1; no performance fix has been made in M0.
 
 ## 10c. A11 idle investigation before terminal implementation (2026-10-08)
 
@@ -295,7 +295,7 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 - 🧪 Stack samples of all controls show `CVDisplayLink::runIOThread`, GPUI's `display_link_output_callback` and `window::step`. Workspace render tracing stops after startup; no continuing content paints were observed. No terminal/cursor exists yet. Sidebar removal does not remove the recurring activity.
 - ✅ Pinned registry source: `gpui-pre-macos-0.3.8/src/window.rs` (`start_display_link`, `display_layer`, `step`) and `src/display_link.rs` (`WindowFrameSource`, `subscribe`) keep a visible window subscribed to CoreVideo until occlusion or teardown. `gpui-pre-0.3.8/src/window.rs` avoids drawing when clean, but still receives frame callbacks. Its `PlatformWindow` interface has no stop/rearm API exposed to the app for this backend. The sidebar's timer is a finite hide transition, not a continuing idle loop (`gpui-component-0.7.1/src/sidebar/mod.rs`).
 - ✅ Native `proc_pid_rusage` CPU fields are Mach ticks, not nanoseconds: [XNU fill_task_rusage](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c) takes values from [task_power_info_locked](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c). The sampler converts with `mach_timebase_info`. 🧪 A single-core busy process validated the sampler at 100.3%. Package-idle wakeups and interrupt wakeups are different counters; the low package-idle number does not mean the display link is stopped.
-- 🧪 Reproduce after a release build: `python3 scripts/perf/idle.py --layout minimal --seconds 30 --sample --output /tmp/devdesk-idle.json`; repeat with `normal` and `no-sidebar`. The sampler does no recurring work inside DevDesk. `DEVDESK_LOG=devdesk=trace` records actual workspace renders in the diagnostics log.
+- 🧪 Reproduce after a release build: `python3 scripts/perf/idle.py --layout minimal --seconds 30 --sample --output /tmp/tervy-idle.json`; repeat with `normal` and `no-sidebar`. The sampler does no recurring work inside Tervy. `TERVY_LOG=tervy=trace` records actual workspace renders in the diagnostics log.
 - ❓ A11 remains an **upstream limitation**, not fixed: interrupt-wakeup rate is consistent with display pacing; exact refresh-rate scaling needs another display configuration to verify. App-level notification or blink changes cannot stop the backend's private frame source. A fix requires a reviewed upstream dependency patch providing demand-based stop/rearm, including input, resize, appearance, GPU recovery and animation regression coverage. No unsafe AppKit workaround, dependency fork or pin change is introduced here. CPU and memory remain over budget; the terminal will add no idle polling or blink timer.
 
 ## 10d. M1 terminal evidence on the replacement machine (2026-10-08)
@@ -303,11 +303,11 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 - 🧪 `scripts/check.sh`: formatting, Clippy (`-D warnings`), 23 tests and license checks pass. Actual PTY tests verify final-output draining, exit status, default/unblocked child signals, foreground-group SIGINT and protocol replies without a UI frame. A deterministic interleaving test uses the real snapshot method to verify output cannot lose its wakeup. Tests replay only captured terminal protocol bytes, never transcripts or rollout files.
 - 🧪 The cached ADR-026 resolver finds nvm Node/npm and Herd PHP on this machine. Interactive startup initially printed a `compinit` error from a dangling Homebrew `_brew_services` symlink pointing to the removed services tap. Reversibly hiding that link fixes fresh login-shell startup; it is a host repair, not a terminal parser change. Owner verified prompt/basic typing and the Option-e accent fix. Fractional font advance now anchors adjacent ASCII and accented cells without a drawn gap.
 - 🧪 **A10:** `Cell` is 24 bytes, so 5,000 × 120 cells have a 14.4 MB inline floor. Actual headless Term/parser peak RSS includes both grids, allocator and metadata. Fresh release processes plateau near 19.1 MB for plain/styled output, 19.7 MB for distinct links, and 77.0 MB when every cell has eight combining marks (`perf/memory-probe.json`, samples at 5,000/10,000/20,000 lines). Thus 24 B/cell is a floor, not a worst-case estimate. GUI `seq 1 2000000` is measured separately in the baseline.
-- 🧪 Fixed scrollback alone did **not** bound upstream metadata: the initial probe retained 100,000 combining marks in one cell and a 100 KB hyperlink. Attributed patches to the pinned Apache/MIT registry sources cap combining marks at eight per cell, link URI/ID at 8,192/256 bytes, live link allocations at 256 per terminal, title text at 200 characters, and OSC payload at 160 KiB. Excess metadata is discarded while normal text survives. Combining/link/OSC recovery tests pass. Exact changes and upgrade obligations: `vendor/README.md` and `vendor/devdesk.patch`. No new license exception or dependency version change.
+- 🧪 Fixed scrollback alone did **not** bound upstream metadata: the initial probe retained 100,000 combining marks in one cell and a 100 KB hyperlink. Attributed patches to the pinned Apache/MIT registry sources cap combining marks at eight per cell, link URI/ID at 8,192/256 bytes, live link allocations at 256 per terminal, title text at 200 characters, and OSC payload at 160 KiB. Excess metadata is discarded while normal text survives. Combining/link/OSC recovery tests pass. Exact changes and upgrade obligations: `vendor/README.md` and `vendor/tervy.patch`. No new license exception or dependency version change.
 - 🧪 Startup controls separated UI layout from process startup: terminal prepaint took under 1 ms; a terminal view without shell spawning launched near the M0 median, while concurrent shell startup increased median first frame to roughly 450 ms in the standard harness. Deferring shell/env startup until after the first window frame removes that contention. The first-frame benchmark exits before spawning a shell; CLI content timing separately includes env resolution and the deferred start. Final first-frame p50 **164.1 ms**, p95/first post-build launch **502.4 ms**; all ten launches are in `perf/baseline-m1.json`. The 500 ms median budget passes; the first launch individually exceeds 500 ms. OS/Metal caches are **not** flushed; these are sequential process launches, not proof of true cold-cache performance.
 - 🧪 The visible release probe dispatches real GPUI keystrokes through native input at varying frame phases. Baseline records both dispatch→PTY-write and dispatch→painted-echo samples; physical keyboard delivery and compositor scanout are excluded. A printable 100 decimal MB `cat` flood accepts queued input and continues painting. Two-million-line `seq` retains the 5,000-line history cap. Headless memory probes and external GUI footprint samples are distinct measurements.
-- 🧪 Installed versions: Claude Code 2.1.295 and codex-cli **0.162.0**. Actual startup-query fixtures show prompt CPR/DA/kitty/color replies; direct PTY tests enforce a 200 ms reply deadline without rendering. CLI probes submit **no model prompt**. Baseline reports view-init→first nonblank content and PTY-spawn→first nonblank content separately; neither proves authentication/readiness or every interactive screen. Agent process footprints are sampled separately from DevDesk. ❓ Full fork/read-only Appendix A probes must be repeated before M4–M6 rely on changed-version flags.
-- 🧪 Final isolated idle shell after 10 s settle, over 60 s: DevDesk **65.49 MB**, **0.758% CPU**, **0.133 package-idle wakes/s**, **120.50 interrupt wakes/s**. Its separate shell child used **4.83 MB** and no measured CPU. The one-terminal memory budget passes; the **0.3% CPU budget is missed**. Echo sample p95 is **9.21 ms**, PTY-write sample p99 **1.534 ms** (20 synthetic events, not a population guarantee). The 100 MB flood completes with queued input preserved; `seq 1 2000000` plateaus near **112 MB** with full scrollback. Claude/Codex PTY-spawn→first content took **280.4/59.6 ms**, and view-init→content **843.2/636.7 ms**.
+- 🧪 Installed versions: Claude Code 2.1.295 and codex-cli **0.162.0**. Actual startup-query fixtures show prompt CPR/DA/kitty/color replies; direct PTY tests enforce a 200 ms reply deadline without rendering. CLI probes submit **no model prompt**. Baseline reports view-init→first nonblank content and PTY-spawn→first nonblank content separately; neither proves authentication/readiness or every interactive screen. Agent process footprints are sampled separately from Tervy. ❓ Full fork/read-only Appendix A probes must be repeated before M4–M6 rely on changed-version flags.
+- 🧪 Final isolated idle shell after 10 s settle, over 60 s: Tervy **65.49 MB**, **0.758% CPU**, **0.133 package-idle wakes/s**, **120.50 interrupt wakes/s**. Its separate shell child used **4.83 MB** and no measured CPU. The one-terminal memory budget passes; the **0.3% CPU budget is missed**. Echo sample p95 is **9.21 ms**, PTY-write sample p99 **1.534 ms** (20 synthetic events, not a population guarantee). The 100 MB flood completes with queued input preserved; `seq 1 2000000` plateaus near **112 MB** with full scrollback. Claude/Codex PTY-spawn→first content took **280.4/59.6 ms**, and view-init→content **843.2/636.7 ms**.
 - 🧪 Owner approved the running M1 window on 2026-10-08 (“looks good lets continue”); the individual TUI/clipboard/IME/Unicode checklist is retained in `docs/m1-review.md`. Pinned GPUI omits physical keypad/base-layout event metadata, limiting those adapter distinctions despite tested encoders. A11 remains the upstream display-link limitation in §10c; idle CPU varies with window/display conditions. M2 lifecycle guarantees and M7 multi-session budgets are not claimed by M1.
 
 ## 10e. M2 lifecycle and workspace evidence (2026-10-08)
@@ -323,7 +323,7 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 ## 10f. M3 process lifecycle and recovery evidence (2026-10-08)
 
 - 🧪 `core::process` owns policy state and monotonic retry times; the supervisor owns PTYs and signals. Configured launches use the cached environment and non-login `$SHELL -c`. Stop escalation uses the current instance's immutable config snapshot. No timer is armed solely for a stopped process; recovery suspends retry scheduling.
-- 🧪 A crashed alternate-screen/mouse/kitty fixture restarts on the same `Arc<Term>`, retains primary and crash text, restores default modes, and answers a cursor query through the new instance's input channel. Direct Handler calls implement ADR-027 without RIS/DECSTR. ✅ Rebinding the pinned Term's private event sink required one attributed public setter in the local Apache-2.0 source; see `vendor/devdesk.patch`.
+- 🧪 A crashed alternate-screen/mouse/kitty fixture restarts on the same `Arc<Term>`, retains primary and crash text, restores default modes, and answers a cursor query through the new instance's input channel. Direct Handler calls implement ADR-027 without RIS/DECSTR. ✅ Rebinding the pinned Term's private event sink required one attributed public setter in the local Apache-2.0 source; see `vendor/tervy.patch`.
 - 🧪 Real-PTY integration tests verify leaderless port-holder cleanup before rebinding, history across automatic retries, Stop cancellation, first-open autostart and unchanged running config. A separate supervisor test process is SIGKILLed; relaunch recovers and kills its ledger-tracked surviving child. Stale birth-time records are discarded; existing identity tests reject reused processes.
 - 🧪 Bundled rusqlite 0.40.2 / libsqlite3-sys 0.38.2 pass the license allowlist. Schema version 1 creates the minimal session ledger; WAL/FULL commits precede Running. The actor alone owns the connection. ❓ Actual Horizon/Vite/Laravel review and interactive process input remain pending in [M3 review](m3-review.md); no real application jobs are run by the fixtures.
 
@@ -342,11 +342,11 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
 
 ### 10h. M5 Claude side conversations (2026-10-08)
 
-- 🧪 `cargo test -p devdesk-core --test claude_interactive -- --ignored --nocapture` drives the interactive CLI through the actual terminal crate. Claude 2.1.295, OAuth, Haiku; only synthetic fixture data is sent. Five forks receive distinct `SessionStart(source=fork)` identities, inherit BLUEHERON and the synthetic design reason, refuse Write/Edit/Bash, and leave all canaries unchanged. The parent waits at least 120 seconds, then completes. All owned sessions are empty after close.
+- 🧪 `cargo test -p tervy-core --test claude_interactive -- --ignored --nocapture` drives the interactive CLI through the actual terminal crate. Claude 2.1.295, OAuth, Haiku; only synthetic fixture data is sent. Five forks receive distinct `SessionStart(source=fork)` identities, inherit BLUEHERON and the synthetic design reason, refuse Write/Edit/Bash, and leave all canaries unchanged. The parent waits at least 120 seconds, then completes. All owned sessions are empty after close.
 - 🧪 All five answers retain the supplied kitty-protocol design reason and avoid claiming that forking stopped the parent. They honestly report that a snapshot cannot verify its live status; this is not a claim that they can monitor the parent.
 - 🧪 Initial harness failures: standalone `sleep` was rejected before the fork; the TUI trust dialog needed separately timed Down/Enter input. The final fixture uses bounded Python waiting and confirms only its own fresh directory. An initially overstrict test rejected an honest “unknown” parent status; the final criterion matches the acceptance list (no false parent-stop claim).
 - 🧪 Complete Fork argv and role downgrade tests pass. A real-PTY synthetic CLI integration covers fork identity/cwd/persistence, side-only stop, hardened same-fork Resume and cascading parent removal. Restore retains Side records as closed history without automatically launching them. No transcript or rollout files are read.
-- 🧪 `DEVDESK_PERF_LAYOUT=side target/release/devdesk` renders synthetic mirrors in a native window without launching a CLI: split widths 480/480 px; parent expands to 960 px after closing the side; history reopens and the one-line question input is reachable. This verifies geometry and state, not a screenshot or human review.
+- 🧪 `TERVY_PERF_LAYOUT=side target/release/tervy` renders synthetic mirrors in a native window without launching a CLI: split widths 480/480 px; parent expands to 960 px after closing the side; history reopens and the one-line question input is reachable. This verifies geometry and state, not a screenshot or human review.
 - 🧪 `ShareOnboardingGuide` is explicitly disallowed and accepted in interactive argv. No account action was invoked. ❓ Independent enumeration of the interactive tool registry and third-party provider/model inheritance remain unverified; no model self-report is treated as security proof.
 - 🧪 Release startup p50 169.0 ms, first/p95 589.9 ms (10 runs, same `normal` benchmark layout as M4). Median changes +0.69%; first launch still misses 500 ms. No new idle or stress pass is claimed; M7 owns those gates.
 
@@ -383,7 +383,7 @@ The compiling manifest is the repo's root `Cargo.toml` (`gpui-kit = "=0.7.1"`, `
   and visible idle CPU still miss budgets. Post-interval sampling shows Core
   blocked in mailbox receive and CoreVideo invoking GPUI's display-link callback.
   `sudo -n powermetrics` requires a password. ❓ Timer attribution remains
-  unavailable; source inspection finds no recurring idle DevDesk deadline.
+  unavailable; source inspection finds no recurring idle Tervy deadline.
 - 🧪 Final startup median **173.3 ms**, first/p95 **633.9 ms**, +5.45% median vs
   M2. First/p95 still misses 500 ms; no OS/Metal cache flush, so no true cold-cache
   claim. Single-shell painted echo p95 **7.853 ms**, write sample p99 **1.009 ms**.
@@ -407,7 +407,7 @@ using AppKit NSColor conversion to sRGB. Applied foreground `#e6e6e6`, bold
 foreground `#f0f0f0`, background `#212734`, selection `#334e5e`, and the profile's
 sixteen ANSI colors. The terminal uses this fixed dark palette in either system
 appearance; application chrome continues to follow the system. The source
-profile has 0.95 background alpha and blur; DevDesk uses an opaque background.
+profile has 0.95 background alpha and blur; Tervy uses an opaque background.
 
 🧪 The supplied dark-mode reference screenshot has a soft blue-gray surface
 (dominant decoded RGB around `#212530`). Dark application chrome now uses the
@@ -442,7 +442,7 @@ One worker batch can be in flight; the supervisor schedules the next sample
 five seconds after completion and disables sampling when no sessions are live.
 Results carry SessionId and LaunchId; stale launches are discarded. Stopped,
 not-yet-sampled or unavailable sessions show a dash. This accounts for child
-processes, not DevDesk's terminal grids; per-process sums are approximate rather
+processes, not Tervy's terminal grids; per-process sums are approximate rather
 than a unique physical-memory total. Native PTY and supervisor tests verify
 child accounting, stale birth rejection and publication of live samples.
 
@@ -463,7 +463,7 @@ All the risks in one place. Details are in the sections referenced.
 | # | Risk | Severity | Mitigation | Ref |
 |---|---|---|---|---|
 | T1 | **GPUI distribution:** no current official crate; dependency on Longbridge's `gpui-pre` snapshots | High | Exact pins, committed lockfile, fallback to a Zed git rev + vendored components | §3, open-questions B-1 |
-| T2 | **GPUI API churn** (pre-1.0, weekly) | Medium | GPUI confined to `devdesk-app`; upgrades only between milestones | §3 |
+| T2 | **GPUI API churn** (pre-1.0, weekly) | Medium | GPUI confined to `tervy-app`; upgrades only between milestones | §3 |
 | T3 | **Toolchain:** default GPUI build needs Xcode + MetalToolchain; CLT-only via `runtime_shaders` untested | Medium | M0 spike; Xcode fallback | §3, A1 |
 | T4 | **Runtime shader compile vs 500 ms cold start** | Low–Medium | Measure in M1; offline shaders if needed | A2 |
 | T5 | **alacritty_terminal minor versions break the API** | Medium | `=0.26.0` pin; deliberate upgrades | §4 |

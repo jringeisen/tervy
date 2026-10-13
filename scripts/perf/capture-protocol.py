@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Capture only terminal startup probes, never agent transcripts or rollouts.
 
-Run from the DevDesk repository with an installed agent: --agent claude|codex.
+Run from the Tervy repository with an installed agent: --agent claude|codex.
 No prompt is submitted and no model turn is requested. Human-visible output
 stays in memory and is discarded; committed fixtures contain queries/replies
 and version/launch metadata only. Review fixture changes after CLI upgrades.
@@ -45,13 +45,13 @@ def main():
     parser.add_argument("--seconds", type=float, default=8)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    raw_env = subprocess.check_output(["/bin/zsh", "-l", "-i", "-c", "printf '\\0DEVDESK_ENV\\0'; env -0"], stderr=subprocess.DEVNULL, timeout=5)
+    raw_env = subprocess.check_output(["/bin/zsh", "-l", "-i", "-c", "printf '\\0TERVY_ENV\\0'; env -0"], stderr=subprocess.DEVNULL, timeout=5)
     env = dict(os.environ)
-    for entry in raw_env.split(b"\0DEVDESK_ENV\0", 1)[1].split(b"\0"):
+    for entry in raw_env.split(b"\0TERVY_ENV\0", 1)[1].split(b"\0"):
         if b"=" in entry:
             key, value = entry.split(b"=", 1)
             env[os.fsdecode(key)] = os.fsdecode(value)
-    env.update(TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="DevDesk", CLAUDE_CODE_NONBLOCKING_STDOUT="1")
+    env.update(TERM="xterm-256color", COLORTERM="truecolor", TERM_PROGRAM="Tervy", CLAUDE_CODE_NONBLOCKING_STDOUT="1")
     argv = [args.agent] + (["--no-daemon"] if args.agent == "codex" else [])
     version = subprocess.check_output([args.agent, "--version"], env=env, text=True, timeout=5).strip()
     master, slave = pty.openpty()

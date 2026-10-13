@@ -84,16 +84,16 @@ stop action propagation. Keymap tests verify their priority over root navigation
 and leave input fields alone; encoder tests cover legacy/kitty Tab and Backtab.
 🧪 Owner confirmed the revised build still does not accept a suggestion with
 Tab, but Right Arrow does, and accepted that workaround. Tab acceptance remains
-an unresolved limitation; it is not claimed as fixed. Opt-in `DEVDESK_TRACE_TAB` diagnostics
+an unresolved limitation; it is not claimed as fixed. Opt-in `TERVY_TRACE_TAB` diagnostics
 report only Tab action resolution, context, mode and encoded bytes; they do not
 record ordinary input or terminal output.
 
 🧪 At the owner's request, projects, configured processes and agents now have
 sidebar × removal controls with an explicit Remove confirmation. Closing a tab
-still preserves a process/agent identity. Removing an agent deletes its DevDesk
+still preserves a process/agent identity. Removing an agent deletes its Tervy
 record and stops its owned session; it does not delete Claude's own conversation.
 Removing a process edits the global TOML definition and stops that instance.
-Removing a project deletes its DevDesk config and agent records, and stops its
+Removing a project deletes its Tervy config and agent records, and stops its
 managed sessions; files in the project folder are untouched. Config writes retain
 unrelated tables/comments and use atomic replacement with an editor-race check.
 Late hooks cannot recreate a record while deletion is stopping its PTY.
@@ -108,13 +108,13 @@ Owner acceptance, using the existing ai-crm config (process autostart stays off)
    then approve or deny and confirm it clears. Check failed-tool/API/blocked-Stop
    scenarios when a safe fixture is available.
 2. Rename the agent and arrange several shell/agent/process tabs. Change a shell
-   cwd, quit, then `cargo run -p devdesk-app`. Confirm order, selection, names and
+   cwd, quit, then `cargo run -p tervy-app`. Confirm order, selection, names and
    cwd; the agent should be a stub. Resume and ask about the earlier prompt to
    confirm the same conversation in the interactive TUI.
 3. Cmd-P → Resume other Claude session, choose a session in the CLI picker, stop
-   it and resume through DevDesk. Check that the chosen session is tracked.
+   it and resume through Tervy. Check that the chosen session is tracked.
 4. Stop/close Claude and confirm the sidebar identity remains resumable. Kill
-   DevDesk only with a safe synthetic agent if checking crash behavior; the helper
+   Tervy only with a safe synthetic agent if checking crash behavior; the helper
    must return without hanging when the app is gone. Existing synthetic helper
    and session-recovery tests cover bounded errors and orphan cleanup separately.
 

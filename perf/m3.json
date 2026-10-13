@@ -30,7 +30,7 @@
     "p95_ms": 719.8,
     "first_after_build_ms": 719.8
   },
-  "normal_startup_method": "release startup.sh 10 with isolated DEVDESK_HOME, normal config + SQLite + single-instance path; first-frame exit. No OS/Metal cache flush.",
+  "normal_startup_method": "release startup.sh 10 with isolated TERVY_HOME, normal config + SQLite + single-instance path; first-frame exit. No OS/Metal cache flush.",
   "comparable_terminal_startup": {
     "runs": 10,
     "samples_ms": [
@@ -49,7 +49,7 @@
     "p95_ms": 577.2,
     "first_after_build_ms": 577.2
   },
-  "comparable_method": "DEVDESK_PERF_LAYOUT=terminal startup.sh release 10, in-memory config, comparable layout to M2.",
+  "comparable_method": "TERVY_PERF_LAYOUT=terminal startup.sh release 10, in-memory config, comparable layout to M2.",
   "echo": {
     "scenario": "echo",
     "managed_children": {
@@ -108,7 +108,7 @@
           ]
         }
       ],
-      "note": "external snapshots; sums are distinct from DevDesk"
+      "note": "external snapshots; sums are distinct from Tervy"
     },
     "agent_cli_processes": {
       "samples": [],

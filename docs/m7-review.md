@@ -10,9 +10,9 @@ their reviews. The absent owner's visual review is not claimed.
 |---|---|
 | 7.1 noisy terminals / A8 | 🧪 Twenty `yes` readers plus one quiet echo child, three visible panes, ten project switches. Frame p95 **9.959 ms**, echo p95 **9.590 ms**, palette **10.315 ms**, shutdown **124.741 ms**. All 21 sessions empty afterward. Stable app thread count **31** under load. Retain one reader per PTY: no shared reader is needed by this measured workload. This does not establish the untested 40-terminal case. |
 | 7.2 memory / A10 | 🧪 Separate empty-window, single-shell, 20-idle-shell and 20-full-history trials are in `perf/baseline.json`. Grid dimensions and every 5,000-line cap are asserted before sampling. Default history remains **5,000 lines**: full histories are user-controlled memory, reported separately from empty-terminal overhead. |
-| 7.3 idle / A11 | 🧪 Windows are verified on screen/frontmost before and after sampling; `caffeinate` prevents display sleep. The 20-idle trial settles ten seconds, then measures sixty. Source inspection finds no recurring DevDesk deadline for idle shells/agents without jobs. A single benchmark-only grid report fires at five seconds, before the interval. `sudo -n powermetrics` fails because a password is required; process counters do not prove zero timer wakeups or attribute upstream callbacks. The visible CPU budget remains missed. |
+| 7.3 idle / A11 | 🧪 Windows are verified on screen/frontmost before and after sampling; `caffeinate` prevents display sleep. The 20-idle trial settles ten seconds, then measures sixty. Source inspection finds no recurring Tervy deadline for idle shells/agents without jobs. A single benchmark-only grid report fires at five seconds, before the interval. `sudo -n powermetrics` fails because a password is required; process counters do not prove zero timer wakeups or attribute upstream callbacks. The visible CPU budget remains missed. |
 | 7.4 panic / recovery | 🧪 Real subprocess test installs the production hook, launches a worker and child, panics, and verifies exit 101, source-location-only log and empty owned session. SIGKILL/relaunch tests verify generic leaderless-session recovery and a separately journaled Codex job after its TUI disappears. Panic logging uses a separate capped append descriptor, not the tracing mutex; the hook sends Shutdown without waiting. |
-| 7.5 app bundle | 🧪 `scripts/bundle.sh` builds `target/DevDesk.app`, validates `Info.plist`, and generates an original icon with Apple drawing tools. Native split/keyboard probes run from its actual executable path. No distribution signing or notarisation; the executable may have the linker's ordinary ad-hoc Mach-O signature. Hook paths derive from `current_exe`. |
+| 7.5 app bundle | 🧪 `scripts/bundle.sh` builds `target/Tervy.app`, validates `Info.plist`, and generates an original icon with Apple drawing tools. Native split/keyboard probes run from its actual executable path. No distribution signing or notarisation; the executable may have the linker's ordinary ad-hoc Mach-O signature. Hook paths derive from `current_exe`. |
 | 7.6 baseline / comparison | 🧪 M2 is preserved in `perf/baseline-m2.json`; M7 becomes `perf/baseline.json`. `scripts/perf/compare.py` reports >15% regressions, requires an explicit recorded reason, rejects missing metrics, and marks different workloads/visibility controls incomparable. No failed metric is converted to zero. |
 | 7.7 keyboard | 🧪 Native Cmd-P/Enter routes switch primary/side focus. Palette routes expose project/process/agent removal, tab/history reopening, split width, links, launch/resume/stop/restart, config reload, recovery and quit. Existing destructive confirmations remain in place. Shift-PageUp/Down and Cmd-Home/End scroll history; Cmd-A selects it for Cmd-C. `README.md` lists shortcuts. CLI-specific TUI navigation remains the CLI's behavior. |
 
@@ -25,7 +25,7 @@ split, real shortcut dispatch and resize probes are separate from headless tests
 
 🧪 The full-history fixture initially lost two or three terminals before launch:
 parallel `openpty` calls returned raw error **-6**. A barrier-based test reproduced
-the error inside PTY allocation, before child creation. DevDesk now serializes
+the error inside PTY allocation, before child creation. Tervy now serializes
 only the short allocate/spawn stage on workers; no Term lock or reader exists
 when that guard is held. Input, readers, painting and teardown do not acquire it.
 Twenty simultaneous launchers start, produce ready markers and cleanly tear down.
@@ -35,12 +35,12 @@ retry was removed after stage diagnostics disproved that hypothesis.
 
 ## Memory change
 
-🧪 Before the change, a visible 20-idle-shell trial used **108.79 MB** in DevDesk
+🧪 Before the change, a visible 20-idle-shell trial used **108.79 MB** in Tervy
 and **103.74 MB** in its separate shell processes. The pinned Apache-licensed
 Alacritty event loop used a **1 MiB** read buffer on each reader's stack. Its
 existing locked-read batch is already approximately 64 KiB. Reducing the read
 buffer to **64 KiB** saves committed per-reader memory; the attributed source
-change and registry diff are in `vendor/README.md` and `vendor/devdesk.patch`.
+change and registry diff are in `vendor/README.md` and `vendor/tervy.patch`.
 It introduces no new license exception or dependency version.
 
 🧪 The smaller buffer passes the 20-noisy probe and the printable **100 decimal

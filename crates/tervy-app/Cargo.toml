@@ -1,0 +1,27 @@
+[package]
+name = "tervy-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "tervy"
+path = "src/main.rs"
+
+[dependencies]
+tervy-core.workspace = true
+tervy-term.workspace = true
+gpui-kit.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-channel.workspace = true
+libc.workspace = true
+chrono = "0.4"
+objc2 = "0.6"
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSDockTile"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+
+[lints]
+workspace = true

@@ -16,7 +16,7 @@ import time
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--binary', type=Path, default=Path('target/release/devdesk'))
+    parser.add_argument('--binary', type=Path, default=Path('target/release/tervy'))
     parser.add_argument('--runs', type=int, default=100)
     parser.add_argument('--output', type=Path, default=Path('perf/local/m4-hook.json'))
     args = parser.parse_args()
@@ -42,8 +42,8 @@ def main():
                     received.append(json.loads(data))
         thread = threading.Thread(target=collect, daemon=True)
         thread.start()
-        env = dict(os.environ, DEVDESK_AGENT_ID='10000000-0000-4000-8000-000000000001', DEVDESK_LAUNCH_ID='1',
-                   DEVDESK_HOOK_TOKEN='20000000-0000-4000-8000-000000000002', DEVDESK_HOOK_SOCKET=path)
+        env = dict(os.environ, TERVY_AGENT_ID='10000000-0000-4000-8000-000000000001', TERVY_LAUNCH_ID='1',
+                   TERVY_HOOK_TOKEN='20000000-0000-4000-8000-000000000002', TERVY_HOOK_SOCKET=path)
         for index in range(args.runs + 5):
             start = time.perf_counter_ns()
             result = subprocess.run([binary, 'hook', 'claude'], env=env, input=payload, capture_output=True, timeout=1)

@@ -46,7 +46,7 @@ pub struct Hyperlink {
 }
 
 impl Hyperlink {
-    // DevDesk: weak slots bound live hyperlink allocations without extending
+    // Tervy: weak slots bound live hyperlink allocations without extending
     // their lifetime or introducing another cross-thread lock.
     pub(crate) fn downgrade(&self) -> std::sync::Weak<HyperlinkInner> {
         Arc::downgrade(&self.inner)
@@ -168,7 +168,7 @@ impl Cell {
     /// Write a new zerowidth character to this cell.
     #[inline]
     pub fn push_zerowidth(&mut self, character: char) {
-        // DevDesk: a single cell must not retain unbounded combining marks.
+        // Tervy: a single cell must not retain unbounded combining marks.
         // Eight accommodates ordinary accents and multi-part emoji clusters.
         if self.zerowidth().is_some_and(|marks| marks.len() >= 8) { return; }
         let extra = self.extra.get_or_insert(Default::default());

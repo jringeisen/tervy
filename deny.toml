@@ -22,10 +22,10 @@ allow = [
 confidence-threshold = 0.9
 unused-allowed-license = "allow"
 
-# Narrow, reviewed exceptions. Each pulled in by GPUI, never by DevDesk directly.
+# Narrow, reviewed exceptions. Each pulled in by GPUI, never by Tervy directly.
 exceptions = [
     # Build-time code generator for gpui-pre-apple's Metal bindings. Runs during
-    # the build and is not linked into or shipped with DevDesk.
+    # the build and is not linked into or shipped with Tervy.
     { crate = "cbindgen", allow = ["MPL-2.0"] },
     # Tiny Option helper used by dirs-sys (via GPUI's font-kit). MPL-2.0 is
     # file-level copyleft: shipping it unmodified in a binary is fine; any

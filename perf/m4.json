@@ -169,7 +169,7 @@
     ],
     "p50_ms": 167.85000000000002,
     "p95_ms": 659.2,
-    "method": "release startup.sh with isolated DEVDESK_HOME; exits after first frame; first sample after rebuild; no OS/Metal cache flush",
+    "method": "release startup.sh with isolated TERVY_HOME; exits after first frame; first sample after rebuild; no OS/Metal cache flush",
     "budget_ms": 500
   },
   "limitations": [

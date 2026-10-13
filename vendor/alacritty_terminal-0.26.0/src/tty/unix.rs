@@ -225,7 +225,7 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
     builder.stderr(slave.try_clone()?);
     builder.stdout(slave);
 
-    // DevDesk: use the resolved environment exactly; do not resurrect variables
+    // Tervy: use the resolved environment exactly; do not resurrect variables
     // explicitly removed by login-shell startup.
     builder.env_clear();
 
@@ -312,7 +312,7 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        // DevDesk: a drained loop can own an already-reaped Child. Never send
+        // Tervy: a drained loop can own an already-reaped Child. Never send
         // SIGHUP to its old (possibly reused) PID when dropping that loop.
         if matches!(self.child.try_wait(), Ok(None)) {
             unsafe {

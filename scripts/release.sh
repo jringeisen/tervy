@@ -8,28 +8,29 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --local) mode="local"; shift ;;
         --output) output_dir="${2:?Missing output directory}"; shift 2 ;;
-        --help) printf 'Usage: scripts/release.sh [--local] [--output DIRECTORY]\nPublic: set DEVDESK_SIGNING_IDENTITY and DEVDESK_NOTARY_PROFILE.\nLocal: ad hoc signed review image; not a public download.\n'; exit 0 ;;
+        --help) printf 'Usage: scripts/release.sh [--local] [--output DIRECTORY]\nPublic: set TERVY_SIGNING_IDENTITY, TERVY_NOTARY_PROFILE, and TERVY_UPDATE_FEED_URL.\nLocal: ad hoc signed review image; not a public download.\n'; exit 0 ;;
         *) printf 'Unknown argument: %s\n' "$1" >&2; exit 2 ;;
     esac
 done
 [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] || { echo 'This beta release requires an Apple Silicon Mac build host.' >&2; exit 1; }
 if [[ "$mode" == public ]]; then
-    : "${DEVDESK_SIGNING_IDENTITY:?Set a Developer ID Application signing identity}"
-    : "${DEVDESK_NOTARY_PROFILE:?Set a notarytool Keychain profile}"
-    [[ "$DEVDESK_SIGNING_IDENTITY" == 'Developer ID Application:'* ]] || { echo 'Use a Developer ID Application identity.' >&2; exit 1; }
+    : "${TERVY_SIGNING_IDENTITY:?Set a Developer ID Application signing identity}"
+    : "${TERVY_NOTARY_PROFILE:?Set a notarytool Keychain profile}"
+    : "${TERVY_UPDATE_FEED_URL:?Set the HTTPS Sparkle appcast URL}"
+    [[ "$TERVY_SIGNING_IDENTITY" == 'Developer ID Application:'* ]] || { echo 'Use a Developer ID Application identity.' >&2; exit 1; }
 fi
 version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
 mkdir -p "$output_dir"
 output_dir=$(cd "$output_dir" && pwd)
-work=$(mktemp -d "${TMPDIR:-/tmp}/devdesk-release.XXXXXX")
+work=$(mktemp -d "${TMPDIR:-/tmp}/tervy-release.XXXXXX")
 trap 'rm -rf "$work"' EXIT
 app="$work/staging/Tervy.app"
 ./scripts/check.sh
 ./scripts/bundle.sh "$app"
-[[ "$(lipo -archs "$app/Contents/MacOS/devdesk")" == arm64 ]] || { echo 'Unexpected binary architecture.' >&2; exit 1; }
+[[ "$(lipo -archs "$app/Contents/MacOS/tervy")" == arm64 ]] || { echo 'Unexpected binary architecture.' >&2; exit 1; }
 notarize() {
     local artifact="$1" log="$2"
-    xcrun notarytool submit "$artifact" --keychain-profile "$DEVDESK_NOTARY_PROFILE" --wait --output-format json > "$log"
+    xcrun notarytool submit "$artifact" --keychain-profile "$TERVY_NOTARY_PROFILE" --wait --output-format json > "$log"
     python3 - "$log" <<'PY'
 import json, sys
 result = json.load(open(sys.argv[1]))
@@ -38,9 +39,24 @@ if result.get('status') != 'Accepted':
 PY
 }
 if [[ "$mode" == public ]]; then
-    codesign --force --options runtime --timestamp --entitlements scripts/meeting-audio.entitlements.plist --sign "$DEVDESK_SIGNING_IDENTITY" "$app/Contents/MacOS/meeting-audio"
-    codesign --force --options runtime --timestamp --sign "$DEVDESK_SIGNING_IDENTITY" "$app"
+    sparkle_bundle="$app/Contents/Frameworks/Sparkle.framework"
+    codesign --force --options runtime --timestamp --sign "$TERVY_SIGNING_IDENTITY" "$sparkle_bundle/Versions/B/XPCServices/Installer.xpc"
+    codesign --force --options runtime --timestamp --preserve-metadata=entitlements --sign "$TERVY_SIGNING_IDENTITY" "$sparkle_bundle/Versions/B/XPCServices/Downloader.xpc"
+    codesign --force --options runtime --timestamp --sign "$TERVY_SIGNING_IDENTITY" "$sparkle_bundle/Versions/B/Autoupdate"
+    codesign --force --options runtime --timestamp --sign "$TERVY_SIGNING_IDENTITY" "$sparkle_bundle/Versions/B/Updater.app"
+    codesign --force --options runtime --timestamp --sign "$TERVY_SIGNING_IDENTITY" "$sparkle_bundle"
+    codesign --force --options runtime --timestamp --sign "$TERVY_SIGNING_IDENTITY" "$app/Contents/Frameworks/TervyUpdater.dylib"
+    codesign --force --options runtime --timestamp --entitlements scripts/meeting-audio.entitlements.plist --sign "$TERVY_SIGNING_IDENTITY" "$app/Contents/Helpers/Tervy Meeting Audio.app"
+    codesign --force --options runtime --timestamp --entitlements scripts/meeting-audio.entitlements.plist --sign "$TERVY_SIGNING_IDENTITY" "$app"
     codesign --verify --deep --strict --verbose=2 "$app"
+    python3 - "$app" "$app/Contents/Helpers/Tervy Meeting Audio.app" <<'PY'
+import plistlib, subprocess, sys
+for path in sys.argv[1:]:
+    result = subprocess.run(['codesign', '-d', '--entitlements', '-', '--xml', path], capture_output=True, check=True)
+    entitlements = plistlib.loads(result.stdout)
+    if entitlements.get('com.apple.security.device.audio-input') is not True:
+        raise SystemExit(f'Audio Input entitlement missing from {path}')
+PY
     ditto -c -k --keepParent "$app" "$work/Tervy.zip"
     notarize "$work/Tervy.zip" "$output_dir/Tervy-$version-app-notary.json"
     xcrun stapler staple "$app"
@@ -78,7 +94,7 @@ filename="Tervy-$version-macos-arm64$suffix.dmg"
 # Work on a fresh image and replace only once packaging succeeds.
 hdiutil create -volname Tervy -srcfolder "$work/staging" -format UDZO -ov "$work/$filename"
 if [[ "$mode" == public ]]; then
-    codesign --timestamp --sign "$DEVDESK_SIGNING_IDENTITY" "$work/$filename"
+    codesign --timestamp --sign "$TERVY_SIGNING_IDENTITY" "$work/$filename"
     notarize "$work/$filename" "$output_dir/Tervy-$version-dmg-notary.json"
     xcrun stapler staple "$work/$filename"
     xcrun stapler validate "$work/$filename"

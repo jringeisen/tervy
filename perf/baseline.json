@@ -41,7 +41,7 @@
     },
     "budget_p50_ms": 500,
     "status": "PASS median; first sample/p95 misses 500 ms. Rebuilt binary, previous native windows; no OS/Metal cache flush. Not a true cold-cache result.",
-    "method": "DEVDESK_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10; exits before shell spawn."
+    "method": "TERVY_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10; exits before shell spawn."
   },
   "idle_release": {
     "layout": "terminal",
@@ -393,13 +393,13 @@
     "history_default_lines": 5000,
     "cell_bytes": 24,
     "inline_full_history_floor_mb": 241.56,
-    "note": "DevDesk footprint and managed-child footprints are separate. Full histories are user-controlled memory, beyond empty-session overhead. Visible pane is 113 columns, hidden panes 100."
+    "note": "Tervy footprint and managed-child footprints are separate. Full histories are user-controlled memory, beyond empty-session overhead. Visible pane is 113 columns, hidden panes 100."
   },
   "idle_cpu_budget_percent": 0.3,
   "idle_cpu_status": "MISS for verified visible empty, single and twenty-shell windows. Upstream GPUI display link remains active (A11).",
   "wakeups": {
     "powermetrics": "sudo -n denied: password required. No measured timer attribution.",
-    "devdesk_timer_audit": "Idle shells/agents without jobs have no recurring actor, blink or redraw deadline. Opt-in grid report is a single timer at five seconds, before ten-second settle ends.",
+    "tervy_timer_audit": "Idle shells/agents without jobs have no recurring actor, blink or redraw deadline. Opt-in grid report is a single timer at five seconds, before ten-second settle ends.",
     "sample": "20-idle post-interval sample: supervisor waits in mailbox receive; CVDisplayLink calls gpui_macos display_link_output_callback. Process counters do not attribute every wakeup."
   },
   "echo": {
@@ -456,7 +456,7 @@
             ]
           }
         ],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [],
@@ -751,247 +751,247 @@
       "process_samples": [
         {
           "at_s": 0.045,
-          "devdesk_threads": 6,
+          "tervy_threads": 6,
           "window": {
             "frontmost": false,
             "on_screen": false,
             "verified": true
           },
-          "devdesk_mb": 19.661736,
+          "tervy_mb": 19.661736,
           "managed_children_count": 0,
           "managed_children_mb": 0.0,
           "agent_cli_count": 0
         },
         {
           "at_s": 0.402,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "on_screen": true,
             "frontmost": true
           },
-          "devdesk_mb": 73.384968,
+          "tervy_mb": 73.384968,
           "managed_children_count": 2,
           "managed_children_mb": 5.964592,
           "agent_cli_count": 0
         },
         {
           "at_s": 0.675,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "verified": true,
             "frontmost": true
           },
-          "devdesk_mb": 73.401352,
+          "tervy_mb": 73.401352,
           "managed_children_count": 1,
           "managed_children_mb": 4.440544,
           "agent_cli_count": 0
         },
         {
           "at_s": 0.965,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "on_screen": true,
             "frontmost": true
           },
-          "devdesk_mb": 230.327448,
+          "tervy_mb": 230.327448,
           "managed_children_count": 4,
           "managed_children_mb": 4.654016,
           "agent_cli_count": 0
         },
         {
           "at_s": 1.264,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "frontmost": true,
             "on_screen": true
           },
-          "devdesk_mb": 362.75944,
+          "tervy_mb": 362.75944,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 1.551,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "frontmost": true,
             "verified": true
           },
-          "devdesk_mb": 368.526608,
+          "tervy_mb": 368.526608,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 1.83,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "frontmost": true,
             "on_screen": true,
             "verified": true
           },
-          "devdesk_mb": 368.755984,
+          "tervy_mb": 368.755984,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 2.111,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "verified": true,
             "frontmost": true
           },
-          "devdesk_mb": 368.772368,
+          "tervy_mb": 368.772368,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 2.391,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "verified": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.361616,
+          "tervy_mb": 370.361616,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 2.671,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "frontmost": true,
             "verified": true,
             "on_screen": true
           },
-          "devdesk_mb": 370.361616,
+          "tervy_mb": 370.361616,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 2.963,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "verified": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.378,
+          "tervy_mb": 370.378,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 3.241,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "on_screen": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.410768,
+          "tervy_mb": 370.410768,
           "managed_children_count": 21,
           "managed_children_mb": 28.414992,
           "agent_cli_count": 0
         },
         {
           "at_s": 3.523,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "frontmost": true,
             "verified": true
           },
-          "devdesk_mb": 370.410768,
+          "tervy_mb": 370.410768,
           "managed_children_count": 21,
           "managed_children_mb": 28.431376,
           "agent_cli_count": 0
         },
         {
           "at_s": 3.809,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "on_screen": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.427152,
+          "tervy_mb": 370.427152,
           "managed_children_count": 21,
           "managed_children_mb": 28.431376,
           "agent_cli_count": 0
         },
         {
           "at_s": 4.092,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "on_screen": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.427152,
+          "tervy_mb": 370.427152,
           "managed_children_count": 21,
           "managed_children_mb": 28.431376,
           "agent_cli_count": 0
         },
         {
           "at_s": 4.383,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "on_screen": true,
             "verified": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.427152,
+          "tervy_mb": 370.427152,
           "managed_children_count": 21,
           "managed_children_mb": 28.431376,
           "agent_cli_count": 0
         },
         {
           "at_s": 4.671,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "verified": true,
             "on_screen": true,
             "frontmost": true
           },
-          "devdesk_mb": 370.443536,
+          "tervy_mb": 370.443536,
           "managed_children_count": 21,
           "managed_children_mb": 28.431376,
           "agent_cli_count": 0
         },
         {
           "at_s": 4.959,
-          "devdesk_threads": 31,
+          "tervy_threads": 31,
           "window": {
             "frontmost": true,
             "on_screen": true,
             "verified": true
           },
-          "devdesk_mb": 370.443536,
+          "tervy_mb": 370.443536,
           "managed_children_count": 21,
           "managed_children_mb": 28.431376,
           "agent_cli_count": 0
         },
         {
           "at_s": 5.249,
-          "devdesk_threads": 9,
+          "tervy_threads": 9,
           "window": {
             "on_screen": false,
             "frontmost": false,
             "verified": true
           },
-          "devdesk_mb": 0.0,
+          "tervy_mb": 0.0,
           "managed_children_count": 0,
           "managed_children_mb": 0.0,
           "agent_cli_count": 0
@@ -1150,7 +1150,7 @@
           ]
         }
       ],
-      "note": "external snapshots; sums are distinct from DevDesk"
+      "note": "external snapshots; sums are distinct from Tervy"
     },
     "agent_cli_processes": {
       "samples": [],
@@ -1282,7 +1282,7 @@
     "idle_footprint_mb": "Panic reporting and new native controls are included; absolute one-terminal memory budget remains separate from empty-window 60 MB target."
   },
   "verification": "scripts/check.sh: fmt, Clippy -D warnings, 69 passing tests, licenses pass. Native bundled split, shortcut/Enter focus, and keyboard resize 480→530 px pass. M6 paid CLI contracts are recorded separately, not rerun here.",
-  "limitations": "Visible CPU, empty-window memory and first-sample startup miss their budgets. Zero DevDesk timer wakeups is a source audit, not powermetrics attribution. Codex jobs born and orphaned between active journal scans may escape; foreign callback panic can abort before graceful cleanup. Forty-terminal behavior untested.",
+  "limitations": "Visible CPU, empty-window memory and first-sample startup miss their budgets. Zero Tervy timer wakeups is a source audit, not powermetrics attribution. Codex jobs born and orphaned between active journal scans may escape; foreign callback panic can abort before graceful cleanup. Forty-terminal behavior untested.",
   "reproduce": "scripts/perf/run-m7.sh; scripts/perf/compare.py perf/baseline-m2.json perf/baseline.json; leave visible windows untouched; no concurrent builds/benchmarks during idle interval.",
   "review": "docs/m7-review.md; autonomous validation and commits authorized by owner."
 }

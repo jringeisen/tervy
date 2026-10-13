@@ -55,7 +55,7 @@ def merge_probe(cli, folder, marker):
     user_log, injected_log = folder / 'user-hooks.jsonl', folder / 'injected-hooks.jsonl'
     (config / 'settings.json').write_text(json.dumps(hooks(marker, user_log, ['Setup'])))
 
-    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(config), ANTHROPIC_API_KEY='devdesk-local-fixture-not-a-secret',
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(config), ANTHROPIC_API_KEY='tervy-local-fixture-not-a-secret',
                ANTHROPIC_BASE_URL='http://127.0.0.1:9',
                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1', NO_PROXY='127.0.0.1,localhost', API_TIMEOUT_MS='5000')
     for key in ['ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY']:
@@ -137,7 +137,7 @@ def main():
     print(f'Claude: {version}')
     if version.split()[0] != '2.1.295':
         print('WARN: version differs from the original verified version; these probes record the current behavior')
-    with tempfile.TemporaryDirectory(prefix='devdesk-cli-probe-') as temporary:
+    with tempfile.TemporaryDirectory(prefix='tervy-cli-probe-') as temporary:
         folder = Path(temporary)
         marker = folder / 'marker.py'
         marker.write_text("import json,sys\np=json.load(sys.stdin)\nwith open(sys.argv[1],'a') as f:f.write(json.dumps({'event':p.get('hook_event_name'),'session_id':p.get('session_id'),'tool_name':p.get('tool_name')})+'\\n')\n")

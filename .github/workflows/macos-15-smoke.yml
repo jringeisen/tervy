@@ -40,27 +40,27 @@ jobs:
           ditto -x -k "$RUNNER_TEMP/Tervy-app.zip" "$RUNNER_TEMP"
           app="$RUNNER_TEMP/Tervy.app"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$app/Contents/Info.plist")" = 15.0
-          test "$(lipo -archs "$app/Contents/MacOS/devdesk")" = arm64
+          test "$(lipo -archs "$app/Contents/MacOS/tervy")" = arm64
           codesign --verify --deep --strict --verbose=2 "$app"
-          "$app/Contents/MacOS/devdesk" hook compatibility-smoke
+          "$app/Contents/MacOS/tervy" hook compatibility-smoke
           echo 'Tervy bundle and CLI entry point loaded on macOS 15 arm64.'
       - name: Render a synthetic first frame on macOS 15
         run: |
           python3 - <<'PY'
           import os, pathlib, subprocess, time
-          executable = pathlib.Path(os.environ['RUNNER_TEMP']) / 'Tervy.app/Contents/MacOS/devdesk'
+          executable = pathlib.Path(os.environ['RUNNER_TEMP']) / 'Tervy.app/Contents/MacOS/tervy'
           environment = dict(os.environ)
           environment.update(
-              DEVDESK_HOME=str(pathlib.Path(os.environ['RUNNER_TEMP']) / 'tervy-smoke-state'),
-              DEVDESK_PERF_LAYOUT='terminal',
-              DEVDESK_PERF_EXIT='1',
-              DEVDESK_PERF_T0=str(time.time_ns()),
+              TERVY_HOME=str(pathlib.Path(os.environ['RUNNER_TEMP']) / 'tervy-smoke-state'),
+              TERVY_PERF_LAYOUT='terminal',
+              TERVY_PERF_EXIT='1',
+              TERVY_PERF_T0=str(time.time_ns()),
           )
           result = subprocess.run(
               [str(executable)], env=environment, capture_output=True, text=True, timeout=45,
               check=False,
           )
-          timing = [line for line in result.stderr.splitlines() if line.startswith('devdesk-perf ')]
+          timing = [line for line in result.stderr.splitlines() if line.startswith('tervy-perf ')]
           if result.returncode or not timing:
               raise SystemExit(f'First-frame smoke failed (exit {result.returncode}): {result.stderr[-2000:]}')
           print(timing[-1])

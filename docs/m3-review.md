@@ -67,7 +67,7 @@ that the crash-recovery integration test explicitly runs. Coverage includes:
 The owner's `ai-crm` global config contains `php artisan serve`,
 `php artisan horizon`, and `npm run dev`, all with **autostart off**. Horizon uses
 SIGTERM with a 30-second grace period and on-failure restart, up to five retries.
-The config backup is `/private/tmp/devdesk-ai-crm-config-before-m3.toml`.
+The config backup is `/private/tmp/tervy-ai-crm-config-before-m3.toml`.
 
 Owner acceptance still needs the running project:
 

@@ -64,7 +64,7 @@ pub struct Parser<const OSC_RAW_BUF_SIZE: usize = MAX_OSC_RAW> {
     osc_raw: Vec<u8>,
     osc_params: [(usize, usize); MAX_OSC_PARAMS],
     osc_num_params: usize,
-    // DevDesk: std also bounds OSC storage and drops the whole oversized OSC.
+    // Tervy: std also bounds OSC storage and drops the whole oversized OSC.
     osc_overflow: bool,
     ignoring: bool,
     partial_utf8: [u8; 4],

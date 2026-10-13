@@ -36,7 +36,7 @@
     },
     "budget_p50_ms": 500,
     "status": "PASS median. First post-build launch 619.4 ms; 402.8 ms elapsed before main. First-run/p95 is 23.3% above M1; median is effectively unchanged. No OS/Metal cache flush; not proof of true cold-cache performance.",
-    "method": "DEVDESK_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10; in-memory config; shell/env deferred until after first frame; benchmark exits before shell spawn."
+    "method": "TERVY_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10; in-memory config; shell/env deferred until after first frame; benchmark exits before shell spawn."
   },
   "idle_release": {
     "layout": "terminal",
@@ -176,7 +176,7 @@
             "commands": []
           }
         ],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [],
@@ -404,6 +404,6 @@
     "m1_record": "perf/baseline-m1.json"
   },
   "verification": "scripts/check.sh: fmt, Clippy -D warnings, 32 tests, licenses pass. Bash/Python benchmark scripts parse. No new license exception. No real model calls in M2.",
-  "reproduce": "scripts/check.sh; scripts/perf/run-m2.sh (close other DevDesk windows; leave benchmark windows untouched).",
+  "reproduce": "scripts/check.sh; scripts/perf/run-m2.sh (close other Tervy windows; leave benchmark windows untouched).",
   "review": "docs/m2-review.md; owner approved M2; M3 has not started."
 }

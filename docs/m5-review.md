@@ -6,7 +6,7 @@ Status: **implemented and autonomously validated**, under the owner's 2026-10-08
 
 🧪 The right pane uses the pinned gpui-component resizable widget through gpui-kit. Its chrome identifies read-only mode, local snapshot time and the current parent name. Esc or Cmd-W with side focus, and the pane’s close button, stop/dismiss only the side. Replacing a displayed side stops the previous side. Sidebar history is nested under the parent; Resume targets the saved fork ID and reapplies all read-only flags. Side history restores closed, never automatically launching. Removing a parent removes/stops its side history as well. Existing M4 JSON records remain compatible through defaulted optional fields; no SQLite migration is needed.
 
-🧪 The paid, ignored test uses real devdesk-term PTYs and synthetic fixture data only. Claude 2.1.295 with OAuth/Haiku passed five interactive forks while a bounded Python parent task waited at least 120 seconds and then completed. All five retained BLUEHERON and the supplied design reason, refused Write/Edit/Bash, left fixture canaries unchanged, and received distinct fork IDs. Answers expressed uncertainty about live parent status without falsely saying it stopped. Each side and the parent were fully cleaned up. No transcript or rollout files were read.
+🧪 The paid, ignored test uses real tervy-term PTYs and synthetic fixture data only. Claude 2.1.295 with OAuth/Haiku passed five interactive forks while a bounded Python parent task waited at least 120 seconds and then completed. All five retained BLUEHERON and the supplied design reason, refused Write/Edit/Bash, left fixture canaries unchanged, and received distinct fork IDs. Answers expressed uncertainty about live parent status without falsely saying it stopped. Each side and the parent were fully cleaned up. No transcript or rollout files were read.
 
 🧪 Initial probe failures were diagnosed and corrected: Claude rejected standalone sleep before any fork; directory trust needed separately timed Down/Enter events; and the first assertion incorrectly rejected an honest “unknown” live status. The final criterion follows the acceptance list. Only each probe’s own newly created directory is trusted automatically.
 
@@ -21,8 +21,8 @@ Status: **implemented and autonomously validated**, under the owner's 2026-10-08
 Reproduce:
 
 - `./scripts/check.sh`
-- `cargo test -p devdesk-core --test claude_interactive -- --ignored --nocapture` (paid synthetic Haiku calls)
-- `DEVDESK_PERF_LAYOUT=side target/release/devdesk` (native synthetic render only)
-- `DEVDESK_PERF_LAYOUT=normal ./scripts/perf/startup.sh release 10`
+- `cargo test -p tervy-core --test claude_interactive -- --ignored --nocapture` (paid synthetic Haiku calls)
+- `TERVY_PERF_LAYOUT=side target/release/tervy` (native synthetic render only)
+- `TERVY_PERF_LAYOUT=normal ./scripts/perf/startup.sh release 10`
 
 M7 still owns visible idle/wakeup investigation and the 20-terminal stress gates. M4’s accepted Right Arrow suggestion-acceptance workaround remains unchanged; Tab acceptance is not claimed fixed.

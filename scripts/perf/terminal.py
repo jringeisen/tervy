@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in UI benchmarks. No model prompt is sent in the agent scenarios.
 
-Build release first. This external sampler records footprint; DevDesk reports
+Build release first. This external sampler records footprint; Tervy reports
 paint timings. Echo dispatches synthetic GPUI keystrokes through native text input; timings
 exclude physical keyboard delivery and compositor scanout. Only scenario names are accepted as commands.
 """
@@ -20,7 +20,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=30)
     args = parser.parse_args()
-    flood = Path("/private/tmp/devdesk-perf-flood.txt")
+    flood = Path("/private/tmp/tervy-perf-flood.txt")
     if args.scenario == "flood":
         # Exactly 100 decimal MB of printable lines; use cat rather than zero
         # bytes, which would benchmark the parser's control-byte fast path.
@@ -32,15 +32,15 @@ def main():
                 data = block[:remaining]
                 file.write(data)
                 remaining -= len(data)
-    env = dict(os.environ, DEVDESK_PERF_LAYOUT="terminal", DEVDESK_PERF_SCENARIO=args.scenario)
-    env.pop("DEVDESK_PERF_EXIT", None)
-    env.pop("DEVDESK_PERF_T0", None)
+    env = dict(os.environ, TERVY_PERF_LAYOUT="terminal", TERVY_PERF_SCENARIO=args.scenario)
+    env.pop("TERVY_PERF_EXIT", None)
+    env.pop("TERVY_PERF_T0", None)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     samples = []
     children = []
     last_child_sample = 0
     with args.output.with_suffix(".stderr.txt").open("w") as log:
-        child = subprocess.Popen([str(Path("target/release/devdesk").resolve())], env=env, stdout=log, stderr=log)
+        child = subprocess.Popen([str(Path("target/release/tervy").resolve())], env=env, stdout=log, stderr=log)
         start = time.monotonic()
         try:
             while child.poll() is None:
@@ -72,8 +72,8 @@ def main():
                 flood.unlink(missing_ok=True)
     measurements = []
     for line in args.output.with_suffix(".stderr.txt").read_text().splitlines():
-        if line.startswith("devdesk-terminal-perf "):
-            measurements.append(json.loads(line.removeprefix("devdesk-terminal-perf ")))
+        if line.startswith("tervy-terminal-perf "):
+            measurements.append(json.loads(line.removeprefix("tervy-terminal-perf ")))
     if not measurements or (args.scenario in ["echo", "flood", "seq"] and len(measurements) < 2):
         raise RuntimeError("benchmark did not report completion; inspect stderr log")
     agent = args.scenario in ["claude", "codex"]
@@ -81,7 +81,7 @@ def main():
     if agent and not agent_samples:
         raise RuntimeError("no agent process observed; inspect the CLI command and sampler")
     result = {"scenario": args.scenario,
-              "managed_children": {"samples": children if not agent else [], "note": "external snapshots; sums are distinct from DevDesk"},
+              "managed_children": {"samples": children if not agent else [], "note": "external snapshots; sums are distinct from Tervy"},
               "agent_cli_processes": {"samples": agent_samples, "peak_sampled_footprint_sum_mb": max((sample["footprint_sum_mb"] for sample in agent_samples), default=0)}, "exit_code": child.returncode, "measurements": measurements,
               "peak_sampled_footprint_mb": max(sample["footprint_mb"] for sample in samples), "footprint_samples": samples,
               "note": "opt-in visible release terminal; first content/echo means GPUI paint, not compositor scanout or agent-ready state"}

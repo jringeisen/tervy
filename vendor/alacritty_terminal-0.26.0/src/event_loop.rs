@@ -21,7 +21,7 @@ use crate::{thread, tty};
 use vte::ansi;
 
 /// Max bytes to read from the PTY before forced terminal synchronization.
-// DevDesk: retain 64 KiB per PTY rather than a 1 MiB reader stack buffer.
+// Tervy: retain 64 KiB per PTY rather than a 1 MiB reader stack buffer.
 // MAX_LOCKED_READ already releases the grid after roughly 64 KiB.
 pub(crate) const READ_BUFFER_SIZE: usize = 0x1_0000;
 

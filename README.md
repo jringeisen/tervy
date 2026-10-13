@@ -33,7 +33,7 @@ cargo run
 The last command creates `target/Tervy.app` with an original icon and
 `Info.plist`, without distribution signing or notarisation. Move the app to its
 final location **before launching agents**: each CLI receives the absolute path
-to that bundle's `Contents/MacOS/devdesk` hook helper. Stop agents before moving
+to that bundle's `Contents/MacOS/tervy` hook helper. Stop agents before moving
 or replacing the bundle, then resume them from the new app.
 
 ### Experimental meeting recordings
@@ -49,6 +49,10 @@ your Mac by default; **Delete audio** removes both tracks while keeping the
 transcript and notes. **Delete meeting** removes the whole entry. If processing
 fails, the meeting stays in the Library and can be retried while its audio is
 present. macOS may ask for microphone and system audio recording permission.
+If capture reports a permission error, open System Settings → Privacy & Security →
+Screen & System Audio Recording and allow Tervy Meeting Audio (or Tervy) to
+record system audio. Also check Microphone access there, then quit and reopen
+Tervy before retrying.
 On-device transcription requires macOS 26 or later and a supported language.
 If selected, the transcript is sent to that AI provider through its agent CLI to
 generate notes. Agents you launch with Tervy's meeting tools can read Library
@@ -111,18 +115,26 @@ conversation resume and read-only side questions are integrated for Claude and
 Codex. Shell rows have a close
 button; process and agent rows keep their start/stop/resume and remove controls.
 
-The **Prompts** section in the Library sidebar stores reusable prompts across all projects.
-Search, create, edit, copy, or delete them there. **Use with active agent** places
-the saved text in the selected running agent's terminal for review before sending.
-Claude Code, Codex, Gemini CLI, and OpenCode launched in Tervy receive the local
-`tervy_local` MCP tools for prompts and meeting notes. These include
-`list_meetings`, `read_meeting`, and `edit_meeting`. An agent can draft a prompt
-or update meeting notes when asked. Agent prompt deletions require confirmation
-in Tervy; read-only side conversations get only the list and read tools. Aider
-has no native MCP connection in this integration;
-use the Library's copy or **Use with active agent** action for Aider. The prompt
-and meeting records are stored in Tervy's local SQLite state database. See
-[Library and MCP](docs/prompts-mcp.md) for tool arguments and provider details.
+The **Skills** section in the Library sidebar reads global agent skill folders.
+Expand any agent shown under Skills to browse its installed skills, then
+open `SKILL.md` to view or edit it. You can create skills and edit supporting
+text files there too. Bundled, synced, linked, and otherwise unwritable skills
+are hidden from the Library. Claude Code, Codex, Gemini CLI, and OpenCode launched in Tervy
+receive `tervy_local` MCP tools for skills and meeting notes. Primary agents
+can create and edit user-owned skills; read-only side conversations can only
+list and read them. Agent skill deletions require confirmation in Tervy.
+Aider has no native skill directory or MCP connection in this integration.
+See [Skills and MCP](docs/skills-mcp.md) for paths, tool arguments, and provider
+details.
+The **Notes** section is a shared scratchpad in the Library. Create notes with a
+title and optional text, search them, and edit or delete them across projects.
+Use **Cmd-N** from any screen to open a new note dialog. Saved notes have a
+**Delete** button in the editor and a trash button in search results; deletion
+asks for confirmation.
+Primary agents can list, read, create, and edit notes through `tervy_local` MCP;
+read-only side conversations can list and read. Agent-requested deletion needs
+confirmation in Tervy. Notes are stored in `state.db` and included in offline
+backups. See [Notes and MCP](docs/notes-mcp.md) for tool arguments.
 Before launching or resuming a primary agent, edit its arguments in the launch
 dialog. For example, enter `--approve-for-me` for Codex. Quoted values with spaces
 are supported. Arguments are saved with each session, and new sessions prefill
@@ -138,7 +150,7 @@ terminal scrollback stored in Tervy. A dash means
 the session is stopped, has not been sampled yet, or its memory is unavailable.
 Agent status and provider details are available by hovering over its name.
 
-Configuration lives at `~/Library/Application Support/DevDesk/config.toml`.
+Configuration lives at `~/Library/Application Support/Tervy/config.toml`.
 Add projects with Cmd-O; add process definitions with **Processes → +**, or edit advanced settings in that global file (the app
 watches it and keeps the last valid configuration after an error). Example:
 
@@ -186,6 +198,7 @@ shell startup files or tool-manager initialization.
 |---|---|
 | Command palette | Cmd-P; type, Up/Down, Enter; Esc to dismiss |
 | Add project / new terminal | Cmd-O / Cmd-T |
+| New note from any screen | Cmd-N |
 | Close focused terminal or side / rename | Cmd-W / Cmd-Shift-R |
 | Next / previous session; first nine sessions | Cmd-Shift-] / Cmd-Shift-[; Cmd-1…9 |
 | Read-only agent question | Cmd-Shift-A, type question, Enter |
@@ -202,6 +215,9 @@ Closing a process tab hides it; stopping and removing it are separate explicit
 commands. Quit confirms running work and stops owned jobs. Closing the window
 hides the app; it does not leave jobs unmanaged. Claude's prompt suggestion is
 accepted with Right Arrow in the tested TUI; Tab is forwarded as terminal input.
+Drag files or folders from Finder onto a terminal or agent pane to insert their
+paths at the cursor. Multiple paths are separated by spaces; Tervy quotes paths
+when needed and does not submit the line.
 
 Agent status for Claude comes from hooks. Codex uses notify, public terminal
 titles, input and BEL: **Active (inferred)** and **Attention** are deliberately
@@ -212,7 +228,7 @@ when configuration cannot be safely read. No transcripts or rollout files are
 parsed. See [agent integration](docs/agent-integration.md) for the exact flags.
 
 SQLite stores lifecycle identities, agent IDs and layout. Terminal output stays
-in bounded memory. Diagnostics live in `~/Library/Logs/DevDesk`, with capped
+in bounded memory. Diagnostics live in `~/Library/Logs/Tervy`, with capped
 current/previous logs and a separate panic log containing source locations rather
 than panic payloads. Crash recovery offers verified surviving sessions for
 termination; a detached Codex job born and orphaned between journal scans can
@@ -226,19 +242,21 @@ Stop sessions and quit Tervy, then run:
 python3 scripts/data-backup.py backup ~/Desktop/tervy-backup.tar.gz
 ```
 
-The archive includes configuration, prompts,
-meeting records and audio, and agent/session metadata. It does not include
+The archive includes configuration, user-owned global skills and supporting
+files, meeting records and audio, and agent/session metadata. It does not include
 project files or terminal scrollback. Keep the archive private: it can contain
-personal prompts and recordings. To restore, quit Tervy, move the existing
-`~/Library/Application Support/DevDesk` directory aside, then run:
+personal skills and recordings. To restore, quit Tervy, move the existing
+`~/Library/Application Support/Tervy` directory aside, then run:
 
 ```sh
 python3 scripts/data-backup.py restore ~/Desktop/tervy-backup.tar.gz
 ```
 
-The restore
-refuses to overwrite existing state and checks the SQLite database. The old
-DevDesk data path remains in use for compatibility with earlier builds.
+The restore refuses to overwrite existing state or skills and checks the SQLite database.
+On first launch, Tervy moves an existing pre-rename application data directory
+to `~/Library/Application Support/Tervy` and updates saved meeting audio paths.
+Quit the previous build before opening Tervy. The new bundle identifier means
+macOS may ask for microphone and system audio permission again.
 
 Reproduce the final measurements with `scripts/perf/run-m7.sh`, then compare
 records using `scripts/perf/compare.py perf/baseline-m2.json perf/baseline.json`.
@@ -299,8 +317,9 @@ For a public Mac release, configure a Developer ID Application certificate and a
 [distribution guidance](https://developer.apple.com/developer-id/), then run:
 
 ```sh
-export DEVDESK_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
-export DEVDESK_NOTARY_PROFILE='devdesk-notary'
+export TERVY_SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)'
+export TERVY_NOTARY_PROFILE='tervy-notary'
+export TERVY_UPDATE_FEED_URL='https://raw.githubusercontent.com/jringeisen/tervy/main/appcast.xml'
 scripts/release.sh
 ```
 
@@ -308,8 +327,10 @@ The script checks the workspace, builds the app, signs with the hardened runtime
 notarizes and staples the app, creates and signs a disk image, then notarizes,
 staples, and verifies the image. It fails if notarization is not accepted. No
 credentials belong in source control. The signing branch must be tested with real
-credentials before publishing. Updates currently require replacing the installed
-app after stopping sessions and quitting; an automatic updater is not included.
+credentials before publishing. [In-app updates](docs/updates.md) use Sparkle and
+require publishing a signed appcast and each versioned disk image. A source-code
+push by itself does not release an update. Existing installations need one manual
+upgrade to an updater-enabled release.
 
 This beta targets **macOS on Apple Silicon**. Intel Mac, Windows, and Linux builds
 are not yet validated. Cross-platform work remains in terminal/process ownership,

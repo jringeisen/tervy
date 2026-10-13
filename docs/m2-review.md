@@ -33,7 +33,7 @@ confirmation, last-good configuration, sub-second reload, comment preservation,
 single-instance activation, leaderless children and SIGHUP/SIGTERM-ignoring jobs.
 The busy-shell test exercises parallel forced shutdown of ten real PTYs.
 
-The global file is `~/Library/Application Support/DevDesk/config.toml`.
+The global file is `~/Library/Application Support/Tervy/config.toml`.
 Add Project creates the file if necessary and appends a project table. Manual
 edits update the project list after a 120 ms debounce; invalid edits show a
 banner and preserve the last good configuration. Removing a project keeps its
@@ -50,9 +50,9 @@ font_size = 14
 option_as_meta = false
 
 [[projects]]
-id = "devdesk"
-name = "DevDesk"
-path = "~/www/devdesk"
+id = "tervy"
+name = "Tervy"
+path = "~/www/tervy"
 ```
 
 | Action | Shortcut |
@@ -76,7 +76,7 @@ path = "~/www/devdesk"
   enter invalid TOML and verify the banner, then undo it.
 - Run `vim` or `sleep 1000` and close its tab: Cancel preserves the job; Stop
   closes it. Run two background sleeps in another tab and close it too.
-- Click the red window button: DevDesk hides and jobs continue. Launch DevDesk
+- Click the red window button: Tervy hides and jobs continue. Launch Tervy
   again to bring the same window back.
 - Run `exit 7`; check the exited state and Return to restart. Check palette and
   rename focus, Escape, and the existing terminal input/clipboard behavior.
@@ -88,7 +88,7 @@ path = "~/www/devdesk"
 The stress-only three-pane arrangement is instrumentation; normal split-pane
 controls belong to M5. The probe uses ten `yes` producers plus one quiet echo
 child across three projects, twenty synthetic keystrokes, ten switches and
-quit during output. It records managed children separately from DevDesk; no
+quit during output. It records managed children separately from Tervy; no
 agent/model call is made. Timings end at GPUI frame/paint callbacks and exclude
 physical keyboard delivery and compositor scanout.
 

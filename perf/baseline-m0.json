@@ -144,15 +144,15 @@
     "budgets": {
       "phys_footprint_mb_no_terminals": 60,
       "cpu_percent": 0.3,
-      "devdesk_timer_wakeups": 0
+      "tervy_timer_wakeups": 0
     },
-    "status": "OVER memory and CPU budgets. Nonzero process idle wakeups; attribution to DevDesk timers vs framework/OS remains unverified (A11, M1).",
+    "status": "OVER memory and CPU budgets. Nonzero process idle wakeups; attribution to Tervy timers vs framework/OS remains unverified (A11, M1).",
     "method": "One visible release window, no terminals or managed children; no build running. After 10 s settle: footprint <pid>, then top -l 31 -s 1 -pid <pid> -stats cpu,idlew. CPU excludes the first sample. IDLEW in default non-event mode is cumulative: rate = (last - first) / timestamp elapsed, not the average column value. top -d was separately probed to verify delta counting. The timer-wakeup budget cannot be assessed by this process counter alone."
   },
   "managed_child_processes": {
     "count": 0
   },
-  "agent_cli_processes_managed_by_devdesk": {
+  "agent_cli_processes_managed_by_tervy": {
     "count": 0
   },
   "previous_machine_record": "baseline-old-machine.json"

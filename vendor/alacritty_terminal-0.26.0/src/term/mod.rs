@@ -327,7 +327,7 @@ pub struct Term<T> {
 
     /// Config directly for the terminal.
     config: Config,
-    // DevDesk: up to 256 live link allocations (at most ~2 MiB of URIs).
+    // Tervy: up to 256 live link allocations (at most ~2 MiB of URIs).
     hyperlink_slots: Vec<std::sync::Weak<cell::HyperlinkInner>>,
     next_hyperlink_slot: usize,
 }
@@ -715,7 +715,7 @@ impl<T> Term<T> {
         &self.mode
     }
 
-    /// DevDesk: replace instance routing after joining the previous PTY reader.
+    /// Tervy: replace instance routing after joining the previous PTY reader.
     /// The embedding application holds the Term lock; grid/history are retained.
     pub fn replace_event_proxy(&mut self, event_proxy: T) {
         self.event_proxy = event_proxy;
@@ -1884,7 +1884,7 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn set_hyperlink(&mut self, hyperlink: Option<Hyperlink>) {
         trace!("Setting hyperlink: {hyperlink:?}");
-        // DevDesk: reject oversized metadata, preserving the displayed text.
+        // Tervy: reject oversized metadata, preserving the displayed text.
         let hyperlink = hyperlink.filter(|link| link.uri.len() <= 8192
             && link.id.as_ref().is_none_or(|id| id.len() <= 256));
         let hyperlink = hyperlink.and_then(|link| {
@@ -2247,7 +2247,7 @@ impl<T: EventListener> Handler for Term<T> {
 
     #[inline]
     fn set_title(&mut self, title: Option<String>) {
-        // DevDesk: titles are also retained on the bounded title stack.
+        // Tervy: titles are also retained on the bounded title stack.
         let title = title.map(|title| title.chars().take(200).collect::<String>());
         trace!("Setting title to '{title:?}'");
 

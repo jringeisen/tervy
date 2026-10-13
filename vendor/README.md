@@ -2,7 +2,7 @@
 
 ✅ These sources were copied from this machine's Cargo registry, not GitHub HEAD.
 Original versions, copyright notices, licenses and `.cargo_vcs_info.json` are
-retained. DevDesk patches are marked `DevDesk` in the source. Published test
+retained. Tervy patches are marked `Tervy` in the source. Published test
 fixture datasets and integration-target manifest entries are omitted.
 
 - `alacritty_terminal` **0.26.0**, Apache-2.0, Alacritty contributors:
@@ -22,7 +22,7 @@ fixture datasets and integration-target manifest entries are omitted.
   resolved environment (ADR-026), so shell rc unsets stay unset.
   `Pty::drop` skips signalling an already-reaped child, preventing a later
   drop of the drained loop from signalling a reused PID.
-  `Term::replace_event_proxy` is a small DevDesk API addition: after joining the
+  `Term::replace_event_proxy` is a small Tervy API addition: after joining the
   old reader, the worker replaces the event sink before attaching a fresh PTY.
   This keeps query replies and lifecycle events bound to the new instance while
   preserving the process's grid and history (ADR-027).
@@ -37,8 +37,8 @@ fixture datasets and integration-target manifest entries are omitted.
 🧪 Reason: M1/A10's registry-source probe retained 100,000 combining marks in one
 cell and a 100 KB hyperlink. Fixed scrollback length alone did not bound memory.
 The dependency versions are unchanged; the event-sink setter is the only public API addition. No GPL code is used.
-DevDesk regression tests cover oversized OSC, recovery, normal clipboard/title
+Tervy regression tests cover oversized OSC, recovery, normal clipboard/title
 sequences, links and combining clusters. Reapply or remove these small patches
 deliberately on a dependency upgrade; inspect the registry diff first.
 
-The exact changes against the registry are recorded in [devdesk.patch](devdesk.patch).
+The exact changes against the registry are recorded in [tervy.patch](tervy.patch).

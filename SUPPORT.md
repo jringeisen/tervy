@@ -10,7 +10,7 @@ relevant, steps to reproduce, what happened, and what you expected. Mention
 whether the app came from a local review build or a signed release. If it is a
 UI problem, a screenshot with private content removed is helpful.
 
-Diagnostics are stored in `~/Library/Logs/DevDesk`. Review and redact them
+Diagnostics are stored in `~/Library/Logs/Tervy`. Review and redact them
 before sharing. Never post credentials, project source, terminal output,
 meeting audio or transcripts, or agent conversations. For a possible security
 issue, use [SECURITY.md](SECURITY.md) instead of a public issue.

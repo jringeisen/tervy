@@ -4,8 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 output_dir="${1:-perf/local}"
 mkdir -p "$output_dir"
-cargo build --release -p devdesk-term --example memory_probe
-cargo build --release -p devdesk-app
+cargo build --release -p tervy-term --example memory_probe
+cargo build --release -p tervy-app
 ./scripts/perf/startup.sh release 10 > "$output_dir/startup.txt"
 for scenario in echo flood seq claude codex; do
     python3 scripts/perf/terminal.py "$scenario" --output "$output_dir/$scenario.json"

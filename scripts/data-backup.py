@@ -14,12 +14,28 @@ import tempfile
 
 
 def state_path():
-    return Path(os.environ.get("DEVDESK_HOME", Path.home() / "Library/Application Support/DevDesk"))
+    if "TERVY_HOME" in os.environ:
+        return Path(os.environ["TERVY_HOME"])
+    current = Path.home() / "Library/Application Support/Tervy"
+    previous = Path.home() / "Library/Application Support/DevDesk"
+    return previous if not current.exists() and previous.exists() else current
+
+
+def skill_roots():
+    home = Path(os.environ.get("TERVY_SKILLS_HOME", str(Path.home())))
+    return {
+        "claude": home / ".claude/skills",
+        "codex": home / ".codex/skills",
+        "shared": home / ".agents/skills",
+        "gemini": home / ".gemini/skills",
+        "opencode": home / ".config/opencode/skills",
+    }
 
 
 def unlocked(directory):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock = (directory / "devdesk.lock").open("a+b")
+    lock_name = "devdesk.lock" if directory.name == "DevDesk" else "tervy.lock"
+    lock = (directory / lock_name).open("a+b")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -52,7 +68,7 @@ def backup(source, archive):
         try:
             with tarfile.open(temporary, "w:gz") as output:
                 metadata = json.dumps({
-                    "format": 1,
+                    "format": 2,
                     "state_path": str(source.absolute()),
                     "resolved_state_path": str(source.resolve()),
                 }).encode()
@@ -62,11 +78,25 @@ def backup(source, archive):
                 output.addfile(header, io.BytesIO(metadata))
                 for path in sorted(source.rglob("*")):
                     relative = path.relative_to(source)
-                    if relative.parts[0] in {"devdesk.lock", "run"}:
+                    if relative.parts[0] in {"tervy.lock", "devdesk.lock", "run"}:
                         continue
                     if path.is_symlink() or not (path.is_file() or path.is_dir()):
                         raise ValueError(f"Unsupported state entry: {relative}")
-                    output.add(path, arcname=Path("DevDesk") / relative, recursive=False)
+                    output.add(path, arcname=Path("Tervy") / relative, recursive=False)
+                for source_id, root in skill_roots().items():
+                    if not root.exists():
+                        continue
+                    if root.is_symlink() or not root.is_dir():
+                        raise ValueError(f"Unsupported skill source: {root}")
+                    for skill in sorted(root.iterdir()):
+                        if skill.name in {".system", "synced"} or skill.name.startswith("."):
+                            continue
+                        if skill.is_symlink() or not skill.is_dir() or not (skill / "SKILL.md").is_file():
+                            continue
+                        for path in [skill, *sorted(skill.rglob("*"))]:
+                            if path.is_symlink() or not (path.is_file() or path.is_dir()):
+                                raise ValueError(f"Unsupported skill entry: {path}")
+                            output.add(path, arcname=Path("Skills") / source_id / path.relative_to(root), recursive=False)
             os.replace(temporary, archive)
         finally:
             if os.path.exists(temporary):
@@ -86,7 +116,7 @@ def restore(target, archive):
             members = source.getmembers()
             metadata_member = source.getmember("TERVY_BACKUP.json")
             metadata = json.load(source.extractfile(metadata_member))
-            if metadata.get("format") != 1:
+            if metadata.get("format") not in {1, 2}:
                 raise ValueError("Unsupported backup format")
             original_roots = [Path(metadata["state_path"])]
             if metadata.get("resolved_state_path"):
@@ -95,11 +125,13 @@ def restore(target, archive):
                 if member.name == "TERVY_BACKUP.json":
                     continue
                 parts = PurePosixPath(member.name).parts
-                if len(parts) < 2 or parts[0] != "DevDesk" or any(part in {"", ".", ".."} for part in parts):
+                if len(parts) < 2 or parts[0] not in {"Tervy", "DevDesk", "Skills"} or any(part in {"", ".", ".."} for part in parts):
                     raise ValueError(f"Unsafe backup path: {member.name}")
+                if parts[0] == "Skills" and (len(parts) < 3 or parts[1] not in skill_roots() or parts[2] in {".system", "synced"} or (member.isfile() and len(parts) < 4)):
+                    raise ValueError(f"Unsafe skill backup path: {member.name}")
                 if not (member.isfile() or member.isdir()):
                     raise ValueError(f"Unsupported backup entry: {member.name}")
-                destination = staging.joinpath(*parts[1:])
+                destination = staging.joinpath(*parts) if parts[0] == "Skills" else staging.joinpath(*parts[1:])
                 if member.isdir():
                     destination.mkdir(parents=True, exist_ok=True, mode=0o700)
                 else:
@@ -107,8 +139,26 @@ def restore(target, archive):
                     with source.extractfile(member) as input_file, destination.open("xb") as output_file:
                         shutil.copyfileobj(input_file, output_file)
                     destination.chmod(0o600)
+        skills_staging = staging / "Skills"
+        for source_id, root in skill_roots().items():
+            staged_root = skills_staging / source_id
+            if not staged_root.exists():
+                continue
+            if root.is_symlink():
+                raise ValueError(f"Skill source is a symlink: {root}")
+            for skill in staged_root.iterdir():
+                if (root / skill.name).exists() or (root / skill.name).is_symlink():
+                    raise ValueError(f"Skill already exists; restore will not overwrite it: {root / skill.name}")
         relocate_meeting_paths(staging, original_roots, target)
         verify_database(staging)
+        if skills_staging.exists():
+            for source_id, root in skill_roots().items():
+                staged_root = skills_staging / source_id
+                if staged_root.exists():
+                    root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    for skill in staged_root.iterdir():
+                        os.replace(skill, root / skill.name)
+            shutil.rmtree(skills_staging)
         if target.exists():
             target.rmdir()
         os.replace(staging, target)

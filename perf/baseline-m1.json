@@ -68,8 +68,8 @@
     "one_terminal_footprint_mb_budget": 100,
     "cpu_status": "OVER",
     "footprint_status": "PASS for one shell; empty-window controls remain over their 60 MB budget",
-    "timer_wakeups_status": "No DevDesk polling/blink timer added. Process counters cannot attribute timers. Pinned GPUI visible-window display link remains active; see docs/technical-research.md §10c.",
-    "method_note": "10 s settle, isolated 60 s sample. External sampler; no build or other benchmark window overlapped. CPU is DevDesk alone, decimal MB footprint. Shell child is separate."
+    "timer_wakeups_status": "No Tervy polling/blink timer added. Process counters cannot attribute timers. Pinned GPUI visible-window display link remains active; see docs/technical-research.md §10c.",
+    "method_note": "10 s settle, isolated 60 s sample. External sampler; no build or other benchmark window overlapped. CPU is Tervy alone, decimal MB footprint. Shell child is separate."
   },
   "input_latency_ms": {
     "gpui_key_to_pty_write_ms": {
@@ -168,7 +168,7 @@
             "agent_present": false
           }
         ],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [],
@@ -355,7 +355,7 @@
             "agent_present": false
           }
         ],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [],
@@ -562,7 +562,7 @@
             "agent_present": false
           }
         ],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [],
@@ -808,7 +808,7 @@
       "scenario": "claude",
       "managed_children": {
         "samples": [],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [
@@ -986,7 +986,7 @@
       "scenario": "codex",
       "managed_children": {
         "samples": [],
-        "note": "external snapshots; sums are distinct from DevDesk"
+        "note": "external snapshots; sums are distinct from Tervy"
       },
       "agent_cli_processes": {
         "samples": [
@@ -1159,12 +1159,12 @@
     "cpu_percent_common_pids": 0.0,
     "same_pids_entire_interval": true
   },
-  "agent_cli_processes_managed_by_devdesk": {
+  "agent_cli_processes_managed_by_tervy": {
     "count": 0,
     "footprint_sum_mb": 0,
     "cpu_percent": 0
   },
-  "agent_cli_note": "Agent scenario trees are separate from DevDesk footprint, include configured CLI subprocesses, and cover startup only. CLI first content is not authentication/readiness. Versions: Claude Code 2.1.295, codex-cli 0.162.0; no model prompt submitted.",
+  "agent_cli_note": "Agent scenario trees are separate from Tervy footprint, include configured CLI subprocesses, and cover startup only. CLI first content is not authentication/readiness. Versions: Claude Code 2.1.295, codex-cli 0.162.0; no model prompt submitted.",
   "previous_milestone_record": "baseline-m0.json",
   "previous_machine_record": "baseline-old-machine.json",
   "a11_controls_record": "a11-empty-window.json",

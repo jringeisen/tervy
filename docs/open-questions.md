@@ -1,4 +1,4 @@
-# DevDesk — Open Questions
+# Tervy — Open Questions
 
 Most product questions were settled in the 2026-10-08 planning interview (recorded as Accepted ADRs in [decisions.md](decisions.md)). Questions that research could answer were answered in [technical-research.md](technical-research.md). Its ❓ items are verification tasks with assigned milestones, not open questions. What remains is below.
 
@@ -21,7 +21,7 @@ Most product questions were settled in the 2026-10-08 planning interview (record
 
 ### B-1 — GPUI source and component library
 
-- **Context:** The official `gpui` crate on crates.io is a year stale (0.2.2). Current GPUI comes either from a Zed git revision or from `gpui-pre`, a weekly snapshot **published by Longbridge, not Zed**. `gpui-component` (Longbridge, Apache-2.0) provides the text input, palette, list, tabs and resizable split DevDesk needs, and pins `gpui-pre` exactly. For a possibly-commercial product, this is a supply-chain choice you should make knowingly.
+- **Context:** The official `gpui` crate on crates.io is a year stale (0.2.2). Current GPUI comes either from a Zed git revision or from `gpui-pre`, a weekly snapshot **published by Longbridge, not Zed**. `gpui-component` (Longbridge, Apache-2.0) provides the text input, palette, list, tabs and resizable split Tervy needs, and pins `gpui-pre` exactly. For a possibly-commercial product, this is a supply-chain choice you should make knowingly.
 - **Options:**
   1. **gpui-component + gpui-pre (pinned).** Fastest path; depends on Longbridge's cadence.
   2. Zed git rev + hand-built widgets. Zed is the only upstream; adds weeks of widget work (text input with IME and selection is the expensive one).
@@ -42,7 +42,7 @@ Most product questions were settled in the 2026-10-08 planning interview (record
 
 ### I-1 — Default stop signal for processes (M3)
 
-- **Context:** The first signal DevDesk sends when stopping a process. Ctrl-C in a terminal sends SIGINT. Many tools treat SIGINT and SIGTERM the same; some don't (e.g. `docker compose up` stops containers gracefully on SIGINT).
+- **Context:** The first signal Tervy sends when stopping a process. Ctrl-C in a terminal sends SIGINT. Many tools treat SIGINT and SIGTERM the same; some don't (e.g. `docker compose up` stops containers gracefully on SIGINT).
 - **Options:** SIGINT (Ctrl-C semantics) · SIGTERM (service-manager semantics).
 - **Recommendation:** **SIGINT** by default, overridable per process (`stop_signal = "SIGTERM"` for Horizon, as in the config example). Escalation to SIGTERM and then SIGKILL is automatic either way.
 - **If deferred:** SIGINT is used.
@@ -70,15 +70,15 @@ Most product questions were settled in the 2026-10-08 planning interview (record
 
 ### I-5 — Workspace structure (M0)
 
-- **Context:** The brief suggested 7 crates. The plan proposes 3 (`devdesk-term`, `devdesk-core`, `devdesk-app`) with module boundaries inside (ADR-011).
+- **Context:** The brief suggested 7 crates. The plan proposes 3 (`tervy-term`, `tervy-core`, `tervy-app`) with module boundaries inside (ADR-011).
 - **Recommendation:** Approve **3 crates**. Splitting a module into a crate later is mechanical.
 - **If deferred:** 3 crates.
 
 ### I-6 — CLI version mismatch policy (M4)
 
-- **Context:** `claude` and `codex` ship near-weekly. DevDesk will know which versions it verified.
+- **Context:** `claude` and `codex` ship near-weekly. Tervy will know which versions it verified.
 - **Options:** Block launching on untested versions · **Warn and continue** · Ignore.
-- **Recommendation:** **Warn** (a banner with "run `scripts/cli-probe.sh`"). Blocking would make DevDesk useless after every CLI update.
+- **Recommendation:** **Warn** (a banner with "run `scripts/cli-probe.sh`"). Blocking would make Tervy useless after every CLI update.
 - **If deferred:** Warn.
 
 ### I-7 — Codex status precision (M6)
@@ -88,7 +88,7 @@ Most product questions were settled in the 2026-10-08 planning interview (record
   1. Heuristics only.
   2. App-server from the start.
   3. **A ½-day spike in M6 decides.**
-- **Recommendation:** **Option 3.** Adopt app-server if the spike shows that DevDesk still owns the lifecycle (its own server process, `--remote` TUI) and status is reliable.
+- **Recommendation:** **Option 3.** Adopt app-server if the spike shows that Tervy still owns the lifecycle (its own server process, `--remote` TUI) and status is reliable.
 - **If deferred:** Heuristics, labelled as inferred.
 
 ## Can Be Deferred (no MVP impact; trigger noted)
@@ -96,14 +96,14 @@ Most product questions were settled in the 2026-10-08 planning interview (record
 | ID | Question | Context and options | Recommendation | Consequence of deferring |
 |---|---|---|---|---|
 | D-1 | **When do we add a daemon?** | Daemon (processes outlive app) vs stay in-process. The supervisor's `Command`/`CoreEvent` seam makes it additive | Only if you repeatedly want servers running with the app closed. Consider Claude's own `--bg` supervisor for agents before building one | None. The seam exists |
-| D-2 | **Git worktree per agent?** | Parallel agents on one repo can clobber each other. Both CLIs now have `--worktree` flags, which may make this cheap | Revisit after a month of daily use. Prefer the CLIs' own `--worktree` over DevDesk-managed worktrees | Parallel agents share a directory (your current workflow) |
-| D-3 | **Per-repo `.devdesk.toml`** | Team-shareable process definitions. Needs a trust prompt showing exact commands, with trust pinned to a content hash | Design at commercial-phase start | Config stays personal and global |
+| D-2 | **Git worktree per agent?** | Parallel agents on one repo can clobber each other. Both CLIs now have `--worktree` flags, which may make this cheap | Revisit after a month of daily use. Prefer the CLIs' own `--worktree` over Tervy-managed worktrees | Parallel agents share a directory (your current workflow) |
+| D-3 | **Per-repo `.tervy.toml`** | Team-shareable process definitions. Needs a trust prompt showing exact commands, with trust pinned to a content hash | Design at commercial-phase start | Config stays personal and global |
 | D-4 | **Keychain-backed secrets** | `env.KEY = { keychain = "svc/acct" }` resolved at spawn | Add when a process needs a secret outside `.env` | None now |
 | D-5 | **Codex status via app-server** | Precise working/approval/input states; protocol is experimental | Adopt when it loses the experimental label or BEL proves noisy | Codex status stays heuristic |
-| D-6 | **Persisted process logs** | Rotating size-capped logs so crash output survives restarts | Add only on demand | Output is lost when DevDesk quits |
+| D-6 | **Persisted process logs** | Rotating size-capped logs so crash output survives restarts | Add only on demand | Output is lost when Tervy quits |
 | D-7 | **Readiness probes** | "Running" vs "Ready" (port open / log regex) | After MVP, if dependent start ordering is needed | Start All starts everything at once |
 | D-8 | **Read-only shell for Claude side conversations** | Sandbox `denyWrite` on the project + Bash allowlist (`git diff`, `git log`). Unverified | Investigate after M5; must pass the same enforcement tests | Claude side conversations can't run `git diff` (Codex's can) |
-| D-9 | **Commercial readiness** | Trademark check on "DevDesk", Developer ID signing, notarisation, auto-update, dependency audit | At the commercial decision | None for personal use (unsigned local build) |
+| D-9 | **Commercial readiness** | Trademark check on "Tervy", Developer ID signing, notarisation, auto-update, dependency audit | At the commercial decision | None for personal use (unsigned local build) |
 | D-10 | **Linux / Windows** | GPUI now renders Linux via wgpu. `term::kill` and `core::env` hold the Unix/macOS specifics | Not before the macOS product is proven | macOS only |
 | D-11 | **Multiple windows / richer layouts** | Brief advises against an elaborate window manager | One window, tabs + one split | None |
 | D-12 | **Alternative terminal engine (libghostty)** | Promising, MIT, but Zig build dependency and pre-1.0 API | Re-evaluate in 2027 | None. alacritty_terminal is sound |

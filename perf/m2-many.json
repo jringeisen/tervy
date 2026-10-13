@@ -67,147 +67,147 @@
   "process_samples": [
     {
       "at_s": 0.047,
-      "devdesk_mb": 8.422096,
+      "tervy_mb": 8.422096,
       "managed_children_count": 0,
       "managed_children_mb": 0.0,
       "agent_cli_count": 0
     },
     {
       "at_s": 0.299,
-      "devdesk_mb": 72.729584,
+      "tervy_mb": 72.729584,
       "managed_children_count": 1,
       "managed_children_mb": 3.228128,
       "agent_cli_count": 0
     },
     {
       "at_s": 0.552,
-      "devdesk_mb": 72.860656,
+      "tervy_mb": 72.860656,
       "managed_children_count": 1,
       "managed_children_mb": 4.34224,
       "agent_cli_count": 0
     },
     {
       "at_s": 0.803,
-      "devdesk_mb": 78.77528,
+      "tervy_mb": 78.77528,
       "managed_children_count": 0,
       "managed_children_mb": 0.0,
       "agent_cli_count": 0
     },
     {
       "at_s": 1.059,
-      "devdesk_mb": 240.370792,
+      "tervy_mb": 240.370792,
       "managed_children_count": 9,
       "managed_children_mb": 14.583992,
       "agent_cli_count": 0
     },
     {
       "at_s": 1.317,
-      "devdesk_mb": 244.860008,
+      "tervy_mb": 244.860008,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 1.572,
-      "devdesk_mb": 247.28484,
+      "tervy_mb": 247.28484,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 1.823,
-      "devdesk_mb": 247.317608,
+      "tervy_mb": 247.317608,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 2.073,
-      "devdesk_mb": 247.350376,
+      "tervy_mb": 247.350376,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 2.329,
-      "devdesk_mb": 248.546408,
+      "tervy_mb": 248.546408,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 2.601,
-      "devdesk_mb": 248.59556,
+      "tervy_mb": 248.59556,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 2.854,
-      "devdesk_mb": 248.59556,
+      "tervy_mb": 248.59556,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 3.106,
-      "devdesk_mb": 248.644712,
+      "tervy_mb": 248.644712,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 3.361,
-      "devdesk_mb": 248.644712,
+      "tervy_mb": 248.644712,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 3.618,
-      "devdesk_mb": 248.644712,
+      "tervy_mb": 248.644712,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 3.878,
-      "devdesk_mb": 248.661096,
+      "tervy_mb": 248.661096,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 4.133,
-      "devdesk_mb": 248.661096,
+      "tervy_mb": 248.661096,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 4.392,
-      "devdesk_mb": 248.661096,
+      "tervy_mb": 248.661096,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 4.644,
-      "devdesk_mb": 248.661096,
+      "tervy_mb": 248.661096,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 4.894,
-      "devdesk_mb": 248.67748,
+      "tervy_mb": 248.67748,
       "managed_children_count": 11,
       "managed_children_mb": 16.911,
       "agent_cli_count": 0
     },
     {
       "at_s": 5.148,
-      "devdesk_mb": 116.081792,
+      "tervy_mb": 116.081792,
       "managed_children_count": 0,
       "managed_children_mb": 0.0,
       "agent_cli_count": 0

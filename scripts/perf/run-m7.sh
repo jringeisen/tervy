@@ -4,10 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 output_dir="${1:-perf/local}"
 mkdir -p "$output_dir" target/perf-helpers
-cargo build --release -p devdesk-app
-cargo build --release -p devdesk-term --example session_cleanup
+cargo build --release -p tervy-app
+cargo build --release -p tervy-term --example session_cleanup
 swiftc -module-cache-path target/perf-helpers/module-cache scripts/perf/window-state.swift -o target/perf-helpers/window-state
-DEVDESK_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10 > "$output_dir/m7-startup.txt"
+TERVY_PERF_LAYOUT=terminal scripts/perf/startup.sh release 10 > "$output_dir/m7-startup.txt"
 python3 scripts/perf/many.py --noisy 20 --output "$output_dir/m7-many.json"
 python3 scripts/perf/terminal.py echo --output "$output_dir/m7-echo.json"
 python3 scripts/perf/terminal.py flood --output "$output_dir/m7-flood.json"

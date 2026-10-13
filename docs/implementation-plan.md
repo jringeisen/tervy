@@ -1,4 +1,4 @@
-# DevDesk — Implementation Plan
+# Tervy — Implementation Plan
 
 Status: **Approved; M0–M7 implementation complete.** M0–M4 are owner approved; M5–M7 proceed under the owner's autonomous implementation/validation/commit authorization (2026-10-08).
 
@@ -27,30 +27,30 @@ flowchart LR
 
 The highlighted milestones carry the highest technical risk. M3 and M4 could run in parallel, but sequential is recommended for one reviewer.
 
-**MVP = M0–M6.** M7 is the hardening pass before relying on DevDesk daily.
+**MVP = M0–M6.** M7 is the hardening pass before relying on Tervy daily.
 
 ---
 
 ## M0 — Foundations (S–M) — ✅ done, owner approved 2026-10-08
 
-**Delivers:** an empty DevDesk window that builds reproducibly on this Mac.
+**Delivers:** an empty Tervy window that builds reproducibly on this Mac.
 
 | # | Task | Size | Depends |
 |---|---|---|---|
 | 0.1 | Install Rust stable via rustup (**needs owner OK**: machine change) | S | — |
 | 0.2 | Try a CLT-only build of a gpui-component hello window with `runtime_shaders` (A1). If it fails: install Xcode + `xcodebuild -downloadComponent MetalToolchain` (**owner OK**) | S | 0.1 |
-| 0.3 | Cargo workspace: `devdesk-term`, `devdesk-core`, `devdesk-app`. Exact pins for the `gpui-kit` facade and `alacritty_terminal`. Commit `Cargo.lock`. Record the compiling manifest + platform initialisation in technical-research | S | 0.2 |
+| 0.3 | Cargo workspace: `tervy-term`, `tervy-core`, `tervy-app`. Exact pins for the `gpui-kit` facade and `alacritty_terminal`. Commit `Cargo.lock`. Record the compiling manifest + platform initialisation in technical-research | S | 0.2 |
 | 0.4 | `scripts/check.sh`: `cargo fmt --check`, `clippy -D warnings`, `cargo test`, `cargo deny check licenses` (allowlist from ADR-020) | S | 0.3 |
 | 0.5 | Window shell: sidebar placeholder + empty workspace, light/dark theme from gpui-component | S | 0.3 |
-| 0.6 | Startup instrumentation: `DEVDESK_PERF=1` logs `t(main)` and `t(first frame)`. `scripts/perf/startup.sh` runs 10 cold starts and reports p50/p95 | S | 0.5 |
-| 0.7 | `tracing` to `~/Library/Logs/DevDesk/devdesk.log` (size-capped) | S | 0.3 |
+| 0.6 | Startup instrumentation: `TERVY_PERF=1` logs `t(main)` and `t(first frame)`. `scripts/perf/startup.sh` runs 10 cold starts and reports p50/p95 | S | 0.5 |
+| 0.7 | `tracing` to `~/Library/Logs/Tervy/tervy.log` (size-capped) | S | 0.3 |
 
 **Acceptance:**
-- `cargo run -p devdesk-app` opens the window on this Mac. The toolchain decision (CLT-only vs Xcode) is recorded in technical-research.md.
+- `cargo run -p tervy-app` opens the window on this Mac. The toolchain decision (CLT-only vs Xcode) is recorded in technical-research.md.
 - `scripts/check.sh` is green.
 - Baseline cold start recorded (empty window).
 
-**Migration review (2026-10-08):** 🧪 Rebuilt on the replacement M2 Max Mac; `scripts/check.sh` passes after owner-approved removal of AirDrop quarantine metadata from source/build paths. M0 measurements are preserved in `perf/baseline-m0.json`; the original machine's record is preserved in `perf/baseline-old-machine.json`. Owner approved M0 and requested its initial publication to a private `jringeisen/devdesk` GitHub repository. Memory and CPU budget misses remain recorded for the A11 investigation at the start of M1. See technical-research §10b.
+**Migration review (2026-10-08):** 🧪 Rebuilt on the replacement M2 Max Mac; `scripts/check.sh` passes after owner-approved removal of AirDrop quarantine metadata from source/build paths. M0 measurements are preserved in `perf/baseline-m0.json`; the original machine's record is preserved in `perf/baseline-old-machine.json`. Owner approved M0 and requested its initial publication to a private `jringeisen/tervy` GitHub repository. Memory and CPU budget misses remain recorded for the A11 investigation at the start of M1. See technical-research §10b.
 
 **Risks:** GPUI build friction. Mitigation: 0.2 is a timeboxed spike (½ day) before anything else.
 
@@ -60,7 +60,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 *Resized after adversarial review: IME, Unicode width, fallback fonts and mouse/focus encoders were missing.*
 
-**Delivers:** a DevDesk window with one fully interactive login shell that can comfortably run `vim`, `htop`, `claude` and `codex`.
+**Delivers:** a Tervy window with one fully interactive login shell that can comfortably run `vim`, `htop`, `claude` and `codex`.
 
 **First, before terminal implementation:** investigate A11 with the empty window: display-link/frame scheduling, cursor blink and sidebar behavior. Fix the idle overhead or document the upstream limitation. Use wakeup counter deltas over elapsed time; the default macOS `top` `IDLEW` values are cumulative, not rates (🧪 migration probe, technical-research §10b).
 
@@ -92,7 +92,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 - **Clipboard:** copy/paste works. Pasting multi-line text into `claude` does not submit early (bracketed paste).
 - **Text and Unicode:** `⌥e e` types é; emoji and CJK align to the grid; Nerd Font/powerline prompts render.
 - **Throughput:** `cat` of a 100 MB file finishes and the window stays responsive. Typing during the flood is echoed once output stops.
-- **Bounded memory:** run `seq 1 2000000`; DevDesk memory plateaus.
+- **Bounded memory:** run `seq 1 2000000`; Tervy memory plateaus.
 - **Measured:** cold start (A2, including runtime shader compile), idle CPU with one idle shell, keystroke→echo latency, bytes per scrollback cell (A10). Record all in `perf/baseline.json`.
 
 **Tests:** snapshot batching, key-encoding tables, a headless PTY integration test (`printf` → grid contents), the signal disposition test.
@@ -107,7 +107,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 ## M2 — Projects, tabs, shell lifecycle (M–L)
 
-**Delivers:** DevDesk replaces your terminal tabs. Multiple projects, multiple shells each, instant switching, clean shutdown.
+**Delivers:** Tervy replaces your terminal tabs. Multiple projects, multiple shells each, instant switching, clean shutdown.
 
 | # | Task | Size | Depends |
 |---|---|---|---|
@@ -123,7 +123,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 **Acceptance:**
 - Three projects, ten terminals. Switching projects never kills a session. **Switch-to-frame under 50 ms** (instrumented).
 - Closing a terminal that ran `sleep 1000 &; sleep 1000 &` leaves **no** survivors (`ps -s <sid>`).
-- Cmd-Q with 10 busy terminals exits within the deadline, and no DevDesk children remain.
+- Cmd-Q with 10 busy terminals exits within the deadline, and no Tervy children remain.
 - Editing `config.toml` by hand updates the sidebar within 1 s. An invalid file shows an error banner and keeps the last good config.
 - Palette opens in under 1 frame and supports fuzzy search.
 - **Stress (moved earlier from M7):**
@@ -156,7 +156,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 - After Horizon crashes and auto-restarts, its crash output is still visible above a "restarted after exit N" separator.
 - `npm run dev` works as a configured process (nvm PATH).
 - `kill -9` of `php artisan horizon` from outside → Failed (red) → restarted per policy. A crash loop stops after 5 failures in 60 s.
-- Force-quitting DevDesk (`kill -9`) and relaunching → survivors detected and killable. A PID reused by an unrelated process is **not** offered.
+- Force-quitting Tervy (`kill -9`) and relaunching → survivors detected and killable. A PID reused by an unrelated process is **not** offered.
 - Typing into a process terminal works (`artisan tinker` as a process).
 
 **Tests:** state machine unit tests covering every transition in the diagram (fake clock); restart/backoff tests; integration test with a script that traps SIGINT and exits slowly (verify escalation timing); PID-reuse guard test.
@@ -167,26 +167,26 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 ## M4 — Claude agents, persistence, restore (L)
 
-**Delivers:** launch, watch, stop and resume Claude agents per project, with live status. DevDesk remembers your layout.
+**Delivers:** launch, watch, stop and resume Claude agents per project, with live status. Tervy remembers your layout.
 
 | # | Task | Size | Depends |
 |---|---|---|---|
 | 4.1 | `core::store`: SQLite (bundled, WAL), `user_version` migrations, `agents` + `ui_state` tables | M | M3 (3.6) |
 | 4.2 | `core::ipc`: Unix socket in a 0700 `run/` dir, socket 0600. Listener with a 250 ms per-connection read deadline, ≤16 concurrent connections, 64 KiB cap, per-agent rate limit, schema validation, `LaunchId` + token check. Tests: slowloris client, oversized message, stale `LaunchId` | M | M2 |
-| 4.3 | Hook helper: `DevDesk hook <kind>` dispatched **before** GPUI init. **Two transports:** stdin (Claude hooks) and last-argv JSON (Codex notify). Extract status fields before truncating. 200 ms connect+write deadline, always exit 0, no stdout. Measure under 10 ms with `hyperfine` | S | 4.2 |
+| 4.3 | Hook helper: `Tervy hook <kind>` dispatched **before** GPUI init. **Two transports:** stdin (Claude hooks) and last-argv JSON (Codex notify). Extract status fields before truncating. 200 ms connect+write deadline, always exit 0, no stdout. Measure under 10 ms with `hyperfine` | S | 4.2 |
 | 4.4 | `core::agent`: `AgentProvider` trait, `ClaudeProvider` (New / Resume / ResumePicker), golden argv tests, `check_installed` + version check | M | 4.1 |
 | 4.5 | Agent status machine (architecture §7) driven by hook signals + exit, including PostToolUseFailure, PermissionDenied and StopFailure. Scenario tests: approve-then-fail, deny, API failure, parallel tools, a blocked Stop | M | 4.2, 4.4 |
 | 4.5b | `LaunchProfile` derived from the record's role on every path (new, resume, picker, restore). Golden test: a Side record never yields Primary argv | S | 4.4 |
 | 4.6 | UI: sidebar Agents section (per project, status dots: working / idle / **needs approval**), Launch Claude, Stop, Rename. Dock badge = number of agents needing approval | M | 4.5 |
 | 4.7 | Restore (ADR-013): save layout on change (debounced), restore on launch, Resume stubs for agents. A shell tab's cwd is read from the shell pid (`proc_pidinfo` `PROC_PIDVNODEPATHINFO`), or from OSC 7 if the shell emits it | M | 4.1 |
 | 4.8 | `scripts/cli-probe.sh`: fork-while-running, enforcement and hook probes from technical-research Appendix A, as one script with PASS/FAIL output | S | 4.4 |
-| 4.9 | Probe A5: user-level probe hook still fires when DevDesk injects `--settings` hooks | S | 4.4 |
+| 4.9 | Probe A5: user-level probe hook still fires when Tervy injects `--settings` hooks | S | 4.4 |
 
 **Acceptance:**
 - "Launch Claude" in Billi opens a pane. The status dot goes idle → working (on prompt) → **needs approval** (on a permission prompt) → working → idle.
 - Quit and relaunch → the same layout; the agent tab is a stub; Resume continues **the same conversation**.
 - "Resume other Claude session…" → pick a session in the CLI picker → it becomes a tracked record.
-- The hook helper adds under 10 ms per event. Killing DevDesk mid-session doesn't hang the agent's hooks.
+- The hook helper adds under 10 ms per event. Killing Tervy mid-session doesn't hang the agent's hooks.
 - A5 confirmed, or mitigated and documented.
 
 **M4 implementation review (2026-10-08):** 🧪 Tasks 4.1–4.9 are implemented; [M4 review](m4-review.md) records automated evidence and the pending owner checklist. Claude 2.1.295 settings merge, running fork and same-session resume probes pass. Warmed release helper timing meets 10 ms; first invocation and first app launch miss their budgets. 🧪 Owner approved M4 (“M4 looks good”) and authorized autonomous validation, commits and continuation through M5–M7 while unavailable. Individual manual coverage limits and performance misses remain recorded.
@@ -199,7 +199,7 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 | # | Task | Size | Depends |
 |---|---|---|---|
-| 5.1 | **First: interactive enforcement test (A3).** Launch the hardened fork argv (agent-integration §5.3) in a DevDesk pane and ask it to Edit, Write and run Bash. All are rejected and the file is unchanged. Automate it via a headless `devdesk-term` PTY in an integration test (gated behind `--ignored`, since it costs tokens). **If it fails:** switch to the headless-fork fallback (ADR-008) before continuing | S | M4 |
+| 5.1 | **First: interactive enforcement test (A3).** Launch the hardened fork argv (agent-integration §5.3) in a Tervy pane and ask it to Edit, Write and run Bash. All are rejected and the file is unchanged. Automate it via a headless `tervy-term` PTY in an integration test (gated behind `--ignored`, since it costs tokens). **If it fails:** switch to the headless-fork fallback (ADR-008) before continuing | S | M4 |
 | 5.2 | `LaunchRequest::Fork` for Claude + golden tests. Fork session ID from `SessionStart(source=fork)` | S | 5.1 |
 | 5.3 | "Ask Agent Question" (Cmd-Shift-A / palette): one-line question input → split pane (gpui-component `resizable`) → launch with observer preamble + question | M | 5.2 |
 | 5.4 | Side-pane chrome: "Read-only · snapshot at 14:32 · of <parent>". Esc/Cmd-W closes and stops it. Listed under the parent in the sidebar history | S | 5.3 |
@@ -221,11 +221,11 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 | # | Task | Size | Depends |
 |---|---|---|---|
-| 6.0 | **½-day spike: app-server status.** A DevDesk-owned `codex app-server --listen unix://…` + TUI `--remote`. If `thread/status/changed` is reliable and the lifecycle stays DevDesk-owned, prefer it over 6.2's heuristics | S | M5 |
+| 6.0 | **½-day spike: app-server status.** A Tervy-owned `codex app-server --listen unix://…` + TUI `--remote`. If `thread/status/changed` is reliable and the lifecycle stays Tervy-owned, prefer it over 6.2's heuristics | S | M5 |
 | 6.1 | `CodexProvider`: `--no-daemon` everywhere, `-c notify` → helper (argv transport; chains the unchanged payload to the user's own notify if set), `tui.notifications` / BEL, golden argv tests | M | 6.0 |
 | 6.2 | Status: notify → Idle + thread ID; Bell → **Attention**; Enter → **Active (inferred)** (10-minute no-output decay); exit → Exited. Exit-summary thread-ID fallback. Scenario tests: menus, Esc-cancel, failed turn, a command printing BEL | M | 6.1 |
 | 6.3 | Fork side conversation: `codex fork <id> --no-daemon -s read-only -a never` + **every configured MCP server disabled + action features disabled** (agent-integration §5.4), failing closed if the config can't be read. **First: interactive enforcement tests (A4):** shell write fails; `apply_patch` rejected; no `mcp__*` tools; `collaboration.*` can't reach the parent | M | 6.1 |
-| 6.4 | Verify stop semantics **in DevDesk's own process tree**: give the agent a deterministic continuing workload (`sleep 20 && touch marker`), Stop it, and confirm the session is empty and `marker` never appears. (`codex agents` only shows the shared daemon, so it proves nothing for `--no-daemon`) | S | 6.1 |
+| 6.4 | Verify stop semantics **in Tervy's own process tree**: give the agent a deterministic continuing workload (`sleep 20 && touch marker`), Stop it, and confirm the session is empty and `marker` never appears. (`codex agents` only shows the shared daemon, so it proves nothing for `--no-daemon`) | S | 6.1 |
 | 6.5 | Review the `AgentProvider` trait against both implementations. Simplify anything Codex didn't need | S | 6.2 |
 
 **Acceptance:** same as M4 and M5, using Codex, plus:
@@ -240,13 +240,13 @@ The highlighted milestones carry the highest technical risk. M3 and M4 could run
 
 ## M7 — Hardening and performance (M)
 
-**Delivers:** confidence to use DevDesk all day.
+**Delivers:** confidence to use Tervy all day.
 
 | # | Task | Size |
 |---|---|---|
 | 7.1 | 20-terminal benchmark (`yes` in 20 panes, 3 visible; the 10-terminal version already ran in M2). Frame p95, input latency, thread count (A8). Decide whether a shared reader is needed | M |
 | 7.2 | Memory budget validation: baseline, +20 idle shells, +20 full scrollbacks. Tune the default `scrollback_lines` | S |
-| 7.3 | Idle CPU and wakeups (`powermetrics --samplers tasks`) with 20 idle sessions: zero DevDesk timer wakeups | S |
+| 7.3 | Idle CPU and wakeups (`powermetrics --samplers tasks`) with 20 idle sessions: zero Tervy timer wakeups | S |
 | 7.4 | Panic hook: log + attempt graceful child shutdown. Crash-relaunch path tested | S |
 | 7.5 | Unsigned `.app` bundle script (stable helper path for hooks; `Info.plist`; icon) | S |
 | 7.6 | Commit `perf/baseline.json` and the comparison script | S |
@@ -281,28 +281,28 @@ not claimed as measured attribution. No absent-owner visual review is claimed.
 
 | Layer | What | Where | When |
 |---|---|---|---|
-| Unit | Provider golden argv; agent & process state machines (every transition, fake `Clock`); restart backoff; config validation; key-encoding tables; snapshot batching | `devdesk-term`, `devdesk-core` | Every `scripts/check.sh` |
-| Headless integration | Real PTYs, no GPUI: grid contents after output; process-group and session kill (including background jobs and SIGHUP-ignorers); stop escalation timing; signal dispositions; PID-reuse guard; IPC socket robustness (malformed, oversized, unknown agent) | `devdesk-core/tests`, `devdesk-term/tests` | Every check |
-| Supervisor determinism | Fake clock + scripted child exits → assert event sequences (race table in architecture §5) | `devdesk-core` | Every check |
-| UI logic | Keep views thin. `gpui-kit`'s `test-support` feature (GPUI test harness + UI helpers, verified to exist in M0) for palette filtering and mirror updates | `devdesk-app` | Every check |
+| Unit | Provider golden argv; agent & process state machines (every transition, fake `Clock`); restart backoff; config validation; key-encoding tables; snapshot batching | `tervy-term`, `tervy-core` | Every `scripts/check.sh` |
+| Headless integration | Real PTYs, no GPUI: grid contents after output; process-group and session kill (including background jobs and SIGHUP-ignorers); stop escalation timing; signal dispositions; PID-reuse guard; IPC socket robustness (malformed, oversized, unknown agent) | `tervy-core/tests`, `tervy-term/tests` | Every check |
+| Supervisor determinism | Fake clock + scripted child exits → assert event sequences (race table in architecture §5) | `tervy-core` | Every check |
+| UI logic | Keep views thin. `gpui-kit`'s `test-support` feature (GPUI test harness + UI helpers, verified to exist in M0) for palette filtering and mirror updates | `tervy-app` | Every check |
 | External CLI contract | `scripts/cli-probe.sh`: fork-while-running, read-only enforcement (both CLIs), hook/notify payload shape, `--no-daemon` stop semantics | Manual script (costs tokens) | **Whenever `claude` or `codex` updates**, and before each milestone sign-off |
-| Agent TUI automation | Drive `claude`/`codex` in a headless `devdesk-term` PTY (enforcement tests) | `#[ignore]` integration tests | On demand |
+| Agent TUI automation | Drive `claude`/`codex` in a headless `tervy-term` PTY (enforcement tests) | `#[ignore]` integration tests | On demand |
 | Manual matrix | vim, nvim, htop, less, fzf, git pager, tmux, artisan tinker, npm run dev, docker compose up, claude, codex | Checklist in each milestone PR | Milestone sign-off |
 
 ## Performance budgets and benchmarking
 
-Every measurement reports **three separate numbers**: (1) DevDesk's own process (`phys_footprint`, CPU), (2) the sum over managed child process trees, (3) the agent CLI processes. Only (1) is DevDesk's budget.
+Every measurement reports **three separate numbers**: (1) Tervy's own process (`phys_footprint`, CPU), (2) the sum over managed child process trees, (3) the agent CLI processes. Only (1) is Tervy's budget.
 
 | Metric | Budget | Method |
 |---|---|---|
-| Cold start → first frame | **< 500 ms** p50 (10 runs) | `scripts/perf/startup.sh` + `DEVDESK_PERF` timestamps |
+| Cold start → first frame | **< 500 ms** p50 (10 runs) | `scripts/perf/startup.sh` + `TERVY_PERF` timestamps |
 | Idle memory, no terminals | < 60 MB | `footprint <pid>` |
 | Idle memory, 20 idle shells (empty scrollback) | **< 100 MB** | same |
 | Scrollback memory | 🧪 inline floor: lines × cols × 24 B/cell; 5,000 × 120 ≈ **14.4 MB**. Headless measured ~19.1 MB plain/styled; all-combining ~77 MB | M1 measured; metadata/allocator add to the floor (technical-research §10d) |
-| Idle CPU (20 idle sessions) | **< 0.3 %** avg over 60 s; **0** DevDesk timer wakeups | `top -l`, `powermetrics --samplers tasks` |
+| Idle CPU (20 idle sessions) | **< 0.3 %** avg over 60 s; **0** Tervy timer wakeups | `top -l`, `powermetrics --samplers tasks` |
 | Project switch | **< 50 ms** to presented frame (aim: 1 frame) | Instrumented action → frame timestamp |
 | Keystroke → PTY write | < 2 ms p99 | Instrumented |
-| Keystroke → echo painted | < 16 ms p95 added by DevDesk | Instrumented, echo-mode test (`cat`) |
+| Keystroke → echo painted | < 16 ms p95 added by Tervy | Instrumented, echo-mode test (`cat`) |
 | Output flood (`cat` 100 MB) | Completes within 1.5× Alacritty's time; other visible panes keep frame p95 under 16 ms | `scripts/perf/flood.sh` |
 | 20 concurrent noisy terminals | UI frame p95 < 33 ms; input stays responsive | `scripts/perf/many.sh` (M7) |
 | Hook helper | < 10 ms per invocation | `hyperfine` |

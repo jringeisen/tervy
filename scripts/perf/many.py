@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Bounded M2 three-project/configurable noisy-session probe, with crash-safe session cleanup.
-Build release app and devdesk-term's session_cleanup example first.
+Build release app and tervy-term's session_cleanup example first.
 """
 import argparse
 import json
@@ -19,15 +19,15 @@ def main():
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     log_path = args.output.with_suffix('.stderr.txt')
-    env = dict(os.environ, DEVDESK_PERF_LAYOUT='many', DEVDESK_PERF_SCENARIO='many', RUST_BACKTRACE='1', DEVDESK_PERF_NOISY=str(args.noisy))
-    env.pop('DEVDESK_PERF_EXIT', None)
-    env.pop('DEVDESK_PERF_T0', None)
+    env = dict(os.environ, TERVY_PERF_LAYOUT='many', TERVY_PERF_SCENARIO='many', RUST_BACKTRACE='1', TERVY_PERF_NOISY=str(args.noisy))
+    env.pop('TERVY_PERF_EXIT', None)
+    env.pop('TERVY_PERF_T0', None)
     samples = []
     cleaned = []
     failure = None
     sampled = False
     with log_path.open('w') as log:
-        app = subprocess.Popen(['target/release/devdesk'], env=env, stdout=log, stderr=log)
+        app = subprocess.Popen(['target/release/tervy'], env=env, stdout=log, stderr=log)
         awake = subprocess.Popen(['caffeinate','-d','-i','-w',str(app.pid)])
         started = time.monotonic()
         try:
@@ -39,7 +39,7 @@ def main():
                     sampled = True
                 try:
                     tree = child_usage(app.pid)
-                    samples.append({'at_s': round(time.monotonic()-started,3), 'devdesk_threads': threads(app.pid), 'window': window_state(app.pid), 'devdesk_mb': usage(app.pid).footprint_bytes/1e6, 'managed_children_count': len(tree), 'managed_children_mb': sum(value.footprint_bytes for value, _ in tree.values())/1e6, 'agent_cli_count':0})
+                    samples.append({'at_s': round(time.monotonic()-started,3), 'tervy_threads': threads(app.pid), 'window': window_state(app.pid), 'tervy_mb': usage(app.pid).footprint_bytes/1e6, 'managed_children_count': len(tree), 'managed_children_mb': sum(value.footprint_bytes for value, _ in tree.values())/1e6, 'agent_cli_count':0})
                 except OSError:
                     pass
                 time.sleep(.2)
@@ -51,10 +51,10 @@ def main():
                 app.wait(timeout=3)
             awake.wait(timeout=3)
             # Includes leaderless members; birth times prevent SID/PID reuse.
-            for sid, birth in re.findall(r'devdesk-owned sid=(\d+) started_us=(\d+)', log_path.read_text()):
+            for sid, birth in re.findall(r'tervy-owned sid=(\d+) started_us=(\d+)', log_path.read_text()):
                 result = subprocess.check_output(['target/release/examples/session_cleanup', sid, birth], text=True, timeout=4)
                 cleaned.append({'sid':int(sid), 'survivors_after_app_exit':int(result.strip())})
-    reports = [json.loads(line.removeprefix('devdesk-many ')) for line in log_path.read_text().splitlines() if line.startswith('devdesk-many ')]
+    reports = [json.loads(line.removeprefix('tervy-many ')) for line in log_path.read_text().splitlines() if line.startswith('tervy-many ')]
     record = {'evidence':'🧪 visible macOS release UI; synthetic GPUI input; no model prompts', 'exit_code':app.returncode, 'failure':failure, 'measurements':reports, 'process_samples':samples, 'sessions':cleaned, 'note':'Configurable yes producers, one raw echo child, three visible panes, ten project switches. Frame callbacks measure GPUI frame scheduling, excluding compositor scanout. Separate managed-child trees; no agent CLI.'}
     args.output.write_text(json.dumps(record,ensure_ascii=False,indent=2)+'\n')
     print(json.dumps({key:value for key,value in record.items() if key!='process_samples'}))

@@ -16,6 +16,8 @@ until the signed candidate and data safety checks pass.
   `spctl --assess`, DMG checksum, and manifest.
 - [ ] Check that `LSMinimumSystemVersion` is 15.0 and the signed recording
   helper has its microphone entitlement.
+- [ ] Confirm Sparkle, its helpers, and the Swift bridge are signed by the
+  release identity. Verify the embedded HTTPS feed URL and Ed25519 public key.
 
 ## Clean machine and upgrade
 
@@ -27,22 +29,25 @@ until the signed candidate and data safety checks pass.
   delete audio, and recover an interrupted recording. Check the signed helper.
 - [ ] Test no agent CLI, Claude only, Codex only, and multiple installed CLIs.
   Verify install/sign-in guidance and provider capability labels.
-- [ ] Back up real beta state after quitting. Replace an older DevDesk build
-  with the candidate without changing the data path or bundle identifier.
-  Confirm projects, prompts, sessions, and meeting records remain available.
+- [ ] Back up real beta state after quitting. Replace an older build with the
+  candidate and verify the previous application data directory migrates to Tervy.
+  Confirm projects, prompts, sessions, meeting records and audio remain available;
+  verify recording permissions with the new bundle identifier.
 - [ ] Restore a backup to a clean account. Confirm prompts and meeting audio;
   test a corrupt archive and a target that already contains state.
 - [ ] Update from the previous candidate, then roll back with an offline
-  backup. Stop sessions and quit before replacing the app.
+  backup. Test the in-app update with no sessions, then with a running session
+  and recording so the stop-and-update confirmation is exercised.
 
 ## Product and publication
 
 - [ ] Observe several solo developers on their own projects for at least a
   week. Track first setup, return to work, recovery, crashes, and open P0 bugs.
 - [ ] Publish a versioned GitHub Release with DMG, checksum, notes, supported
-  macOS versions, experimental meeting caveat, manual update and rollback steps,
-  and a support route. Publishing and changing repository visibility require
-  the maintainer's final approval.
+  macOS versions, experimental meeting caveat, update and rollback steps, and
+  a support route. Upload the signed DMG before publishing the signed appcast.
+  Publishing and changing repository visibility require the maintainer's final
+  approval.
 
 ## Evidence collected on 2026-10-11
 
@@ -51,7 +56,7 @@ until the signed candidate and data safety checks pass.
   transferred it to macOS 15, verified the ad hoc signature and minimum OS
   version, loaded the CLI entry point, and rendered a synthetic first app
   frame. A clean-account install and full core workflow remain open.
-- After Tervy quit, an offline backup of existing DevDesk state restored into
+- After Tervy quit, an offline backup of existing Tervy state restored into
   an isolated temporary directory. The check verified the configuration,
   12 non-database files, SQLite integrity, one prompt, one meeting, and that
   restored meeting paths no longer referred to the original state. The current

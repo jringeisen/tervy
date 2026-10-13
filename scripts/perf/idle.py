@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Measure DevDesk alone using macOS cumulative process counters.
+"""Measure Tervy alone using macOS cumulative process counters.
 
 Build first, then run: scripts/perf/idle.py --layout normal --seconds 60
-The sampler does no recurring work in DevDesk. Counter layout/units come from
+The sampler does no recurring work in Tervy. Counter layout/units come from
 the selected macOS SDK's sys/resource.h (rusage_info_v0). CPU Mach ticks are
 converted with mach_timebase_info; see XNU task_power_info_locked in task.c.
 Package-idle wakeups are not all thread wakeups and do not identify timers.
@@ -41,7 +41,7 @@ def usage(pid):
 
 
 def child_usage(root_pid):
-    """External process-tree snapshot; never runs inside DevDesk."""
+    """External process-tree snapshot; never runs inside Tervy."""
     rows = subprocess.check_output(["ps", "-ax", "-o", "pid=,ppid=,comm="], text=True)
     children = []
     for line in rows.splitlines():
@@ -99,7 +99,7 @@ def main():
     parser.add_argument("--layout", choices=["normal", "no-sidebar", "minimal", "terminal", "idle20", "scrollback20"], default="normal")
     parser.add_argument("--seconds", type=float, default=60)
     parser.add_argument("--settle", type=float, default=10)
-    parser.add_argument("--binary", type=Path, default=Path("target/release/devdesk"))
+    parser.add_argument("--binary", type=Path, default=Path("target/release/tervy"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sample", action="store_true")
     args = parser.parse_args()
@@ -107,13 +107,13 @@ def main():
         parser.error("seconds must be positive and settle nonnegative")
     env = os.environ.copy()
     ns_per_tick = nanoseconds_per_tick()
-    env["DEVDESK_PERF_LAYOUT"] = args.layout
+    env["TERVY_PERF_LAYOUT"] = args.layout
     if args.layout == "scrollback20":
-        env["DEVDESK_PERF_SCENARIO"] = "scrollback"
-    env["DEVDESK_LOG"] = "devdesk=trace"
+        env["TERVY_PERF_SCENARIO"] = "scrollback"
+    env["TERVY_LOG"] = "tervy=trace"
     # Keep the first-frame benchmark's quit flag out of long-running probes.
-    env.pop("DEVDESK_PERF_EXIT", None)
-    env.pop("DEVDESK_PERF_T0", None)
+    env.pop("TERVY_PERF_EXIT", None)
+    env.pop("TERVY_PERF_T0", None)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.with_suffix(".stderr.txt").open("w") as log:
         app = subprocess.Popen([str(args.binary.resolve())], env=env, stdout=log, stderr=log)
@@ -124,7 +124,7 @@ def main():
             grids = []
             if args.layout in ("idle20", "scrollback20"):
                 lines = args.output.with_suffix(".stderr.txt").read_text().splitlines()
-                reports = [line.removeprefix("devdesk-idle-grids ") for line in lines if line.startswith("devdesk-idle-grids ")]
+                reports = [line.removeprefix("tervy-idle-grids ") for line in lines if line.startswith("tervy-idle-grids ")]
                 if len(reports) != 1:
                     raise RuntimeError("missing one-shot grid report before idle interval")
                 grids = ast.literal_eval(reports[0])
@@ -178,7 +178,7 @@ def main():
                 app.kill()
                 app.wait()
             awake.wait(timeout=3)
-            for sid, birth in re.findall(r"devdesk-owned sid=(\d+) started_us=(\d+)", args.output.with_suffix(".stderr.txt").read_text()):
+            for sid, birth in re.findall(r"tervy-owned sid=(\d+) started_us=(\d+)", args.output.with_suffix(".stderr.txt").read_text()):
                 subprocess.run(["target/release/examples/session_cleanup", sid, birth], check=True, capture_output=True, timeout=5)
 
 

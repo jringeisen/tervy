@@ -45,10 +45,11 @@ presenting advanced configuration or the experimental meeting workflow.
    explicit rights for reserved artwork, contributor instructions, a private
    security reporting path, support guidance, and pull-request CI. Preserve
    third-party notices and license files.
-2. **A real distributable.** Validate the macOS 15+ minimum and retained app
+2. **A real distributable.** Validate the macOS 15+ minimum and Tervy app
    identity, then build, sign, notarize, install, and update a candidate on a
-   clean Mac account. Confirm that existing DevDesk data migrates if its paths
-   or bundle identity change. A local ad-hoc DMG is only a review artifact.
+   clean Mac account. Confirm that earlier local state migrates to Tervy and
+   recording permissions work with the new bundle identifier. A local ad-hoc
+   DMG is only a review artifact.
 3. **User data safety.** Validate the new offline backup and restore procedure for
    configuration, prompts, meeting text/audio, and state. Test it after a
    forced quit and across an update. Do not rely on copying a live SQLite WAL
@@ -100,7 +101,7 @@ user-visible battery or responsiveness problems seen in beta.
 - Daily work: add and rename project, terminal input/scrollback, create/edit
   process, stop/restart, launch/resume agent, ask read-only question, quit/reopen.
 - Data: import or restore a backup with prompts and meetings; upgrade an older
-  DevDesk state; force quit while a process or recording is active.
+  Tervy state; force quit while a process or recording is active.
 - Distribution: local build, signed/notarized DMG, clean account install,
   Gatekeeper check, update and rollback, artifact checksum and version display.
 - Community: README build path, successful PR CI, issue/support guidance,
@@ -118,5 +119,5 @@ The first implementation pass added Apache-2.0 and brand terms, participation
 docs and PR CI, process editing, an offline backup/restore tool, OS and meeting
 boundaries, transcript delivery choice, and release checks. The local review
 DMG builds and verifies on macOS 27. These are implementation checks; the
-macOS 15 clean install, signed macOS 26 recording, DevDesk upgrade, and beta
+macOS 15 clean install, signed macOS 26 recording, Tervy upgrade, and beta
 user observations are still open acceptance gates.

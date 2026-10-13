@@ -12,7 +12,7 @@
     "phys_footprint_mb": 75,
     "cpu_percent_avg_30s": 0.38,
     "idle_wakeups_per_s_avg_30s": 76.1,
-    "budgets": { "phys_footprint_mb_no_terminals": 60, "cpu_percent": 0.3, "devdesk_timer_wakeups": 0 },
+    "budgets": { "phys_footprint_mb_no_terminals": 60, "cpu_percent": 0.3, "tervy_timer_wakeups": 0 },
     "status": "OVER budget on all three; investigate in M1 (see technical-research A11)"
   }
 }

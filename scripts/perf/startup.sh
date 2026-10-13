@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cold-start benchmark (implementation-plan.md task 0.6).
-# Launches DevDesk N times, each run quitting right after its first frame,
+# Launches Tervy N times, each run quitting right after its first frame,
 # and reports p50/p95 of launch → first rendered frame.
 #
 # Usage: scripts/perf/startup.sh [release|debug] [runs]
@@ -10,18 +10,18 @@ cd "$(dirname "$0")/../.."
 profile="${1:-release}"
 runs="${2:-10}"
 if [[ "$profile" == "release" ]]; then
-    cargo build --release -p devdesk-app --quiet
+    cargo build --release -p tervy-app --quiet
 else
-    cargo build -p devdesk-app --quiet
+    cargo build -p tervy-app --quiet
 fi
-bin="target/$profile/devdesk"
+bin="target/$profile/tervy"
 
 results=()
 for i in $(seq 1 "$runs"); do
     t0=$(python3 -c 'import time; print(time.time_ns())')
-    line=$(DEVDESK_PERF_T0="$t0" DEVDESK_PERF_EXIT=1 "$bin" 2>&1 >/dev/null | grep '^devdesk-perf' || true)
+    line=$(TERVY_PERF_T0="$t0" TERVY_PERF_EXIT=1 "$bin" 2>&1 >/dev/null | grep '^tervy-perf' || true)
     if [[ -z "$line" ]]; then
-        echo "run $i: no devdesk-perf line (did the window open?)" >&2
+        echo "run $i: no tervy-perf line (did the window open?)" >&2
         exit 1
     fi
     ms=$(sed -E 's/.*to_first_frame_ms=([0-9.]+).*/\1/' <<<"$line")
