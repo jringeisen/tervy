@@ -1,8 +1,23 @@
 # V1 release checklist
 
-This is the evidence record for a public release. Keep a dated copy with the
-release notes and link logs or issues for failed steps. No public distribution
-until the signed candidate and data safety checks pass.
+This is the evidence record for a v1 launch. Keep a dated copy with the release
+notes and link logs or issues for failed steps. The public beta evidence below
+does not complete every v1 product and data safety check.
+
+## Public beta 0.1.7 — 2026-10-13
+
+- [Tervy 0.1.7](https://github.com/jringeisen/tervy/releases/tag/v0.1.7)
+  is public with a Developer ID signed, notarized, and stapled Apple Silicon DMG.
+  Apple accepted the app submission `82da5fa0-5169-46eb-bff3-b493a28a372d`
+  and DMG submission `a8827573-62ff-4a07-b6f8-ad29f114886a`.
+- `./scripts/check.sh` passed locally. The packaged app passed deep signature
+  verification and Gatekeeper assessment. The public DMG's SHA-256 is
+  `b0dc17ffb5f055c083dca7fab4cad724963f45c0ce0453182deb57cf26945e67`.
+- The public [signed update feed](https://raw.githubusercontent.com/jringeisen/tervy/main/appcast.xml)
+  and DMG were downloaded without authentication; the feed signature and DMG
+  checksum verified. Version 0.1.7 is the first updater-enabled build.
+- Manual clean-account installation and an in-app upgrade from 0.1.7 to a later
+  release remain to be observed. The product checks below remain the v1 gates.
 
 ## Candidate
 

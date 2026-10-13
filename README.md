@@ -12,6 +12,14 @@ complete; performance limits and validation evidence are in the
 [final technical review](docs/m7-review.md). The [v1 product review](docs/v1-product-review.md)
 tracks the remaining product and release work.
 
+## Download
+
+[Download Tervy 0.1.7 for Apple Silicon](https://github.com/jringeisen/tervy/releases/download/v0.1.7/Tervy-0.1.7-macos-arm64.dmg),
+open the DMG, and drag Tervy to Applications. See the [latest release](https://github.com/jringeisen/tervy/releases/latest)
+for the checksum and release notes. Once installed, Tervy checks for updates and
+shows a badge on the Settings gear when one is available. Open Settings to install
+an update. Earlier Tervy builds need one manual replacement with version 0.1.7.
+
 The Tervy application code is [Apache-2.0 licensed](LICENSE). Original Tervy
 brand assets are reserved; see the [brand usage terms](assets/brand/README.md#asset-rights).
 Vendored dependencies retain their own licenses and attribution in
@@ -308,7 +316,7 @@ scripts/release.sh --local
 
 The image in `target/releases` includes Tervy, an Applications shortcut, and
 installation instructions. A SHA-256 checksum and machine-readable release
-manifest accompany it. Local images are **unsigned and not notarized**; they are
+manifest accompany it. Local images are **ad hoc signed and not notarized**; they are
 review artifacts, not public releases. A manual GitHub Actions workflow builds
 these artifacts without publishing a release.
 
@@ -326,8 +334,7 @@ scripts/release.sh
 The script checks the workspace, builds the app, signs with the hardened runtime,
 notarizes and staples the app, creates and signs a disk image, then notarizes,
 staples, and verifies the image. It fails if notarization is not accepted. No
-credentials belong in source control. The signing branch must be tested with real
-credentials before publishing. [In-app updates](docs/updates.md) use Sparkle and
+credentials belong in source control. [In-app updates](docs/updates.md) use Sparkle and
 require publishing a signed appcast and each versioned disk image. A source-code
 push by itself does not release an update. Existing installations need one manual
 upgrade to an updater-enabled release.
@@ -335,6 +342,5 @@ upgrade to an updater-enabled release.
 This beta targets **macOS on Apple Silicon**. Intel Mac, Windows, and Linux builds
 are not yet validated. Cross-platform work remains in terminal/process ownership,
 IPC, shell discovery, app integration, and packaging. Downloads do not sync local
-settings or project files. Before a public launch, resolve domain availability
-and name availability for Tervy; this brand kit
-does not establish exclusive rights to the name.
+settings or project files. This brand kit does not establish exclusive rights to
+the Tervy name.
