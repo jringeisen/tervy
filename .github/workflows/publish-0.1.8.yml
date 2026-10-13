@@ -26,22 +26,34 @@ jobs:
           set -euo pipefail
           [[ "$DOWNLOAD_URL" == https://*.ngrok-free.dev/* ]]
           output="$RUNNER_TEMP/Tervy-0.1.8-macos-arm64.dmg"
+          part="$RUNNER_TEMP/tervy-download-part"
           expected_size=14623896
+          chunk_size=131072
           : > "$output"
-          for ((attempt=1; attempt<=200; attempt++)); do
-            current_size=$(wc -c < "$output")
-            echo "Attempt $attempt: $current_size / $expected_size bytes"
-            if [[ "$current_size" -eq "$expected_size" ]]; then break; fi
-            [[ "$current_size" -lt "$expected_size" ]]
-            curl --http1.1 --fail --location --silent --show-error \
-              --connect-timeout 15 --max-time 60 \
-              --speed-time 15 --speed-limit 1024 \
-              --continue-at - \
-              -H 'ngrok-skip-browser-warning: 1' \
-              --output "$output" "$DOWNLOAD_URL" || true
-            sleep 2
+          for ((start=0; start<expected_size; start+=chunk_size)); do
+            end=$((start + chunk_size - 1))
+            if ((end >= expected_size)); then end=$((expected_size - 1)); fi
+            received=false
+            for ((attempt=1; attempt<=30; attempt++)); do
+              if status=$(curl --http1.1 --fail --location --silent --show-error \
+                --connect-timeout 15 --max-time 45 \
+                --speed-time 10 --speed-limit 1024 \
+                -H 'ngrok-skip-browser-warning: 1' \
+                -H "Range: bytes=$start-$end" \
+                --write-out '%{http_code}' \
+                --output "$part" "$DOWNLOAD_URL"); then
+                if [[ "$status" == 206 && "$(wc -c < "$part")" -eq $((end - start + 1)) ]]; then
+                  received=true
+                  break
+                fi
+              fi
+              echo "Retrying bytes $start-$end (attempt $attempt)"
+              sleep 2
+            done
+            [[ "$received" == true ]]
+            cat "$part" >> "$output"
+            echo "Downloaded $((end + 1)) / $expected_size bytes"
           done
-          [[ "$(wc -c < "$output")" -eq "$expected_size" ]]
           printf '%s  %s\n' \
             d5c1279dcaec88a46c63e2bb1144f55f3196fd5bececa71661d05719190ad28a \
             "$output" | sha256sum --check -
