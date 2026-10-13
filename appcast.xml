@@ -1,0 +1,39 @@
+<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
+--><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Tervy</title>
+        <item>
+            <title>0.1.7</title>
+            <pubDate>Tue, 13 Oct 2026 15:47:20 -0500</pubDate>
+            <sparkle:version>0.1.7</sparkle:version>
+            <sparkle:shortVersionString>0.1.7</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Tervy 0.1.7
+
+First public beta for Apple Silicon Macs running macOS 15 or later.
+
+Tervy brings project terminals, processes, and coding agents into one workspace. This release adds a shared Notes library, skill browsing and editing, improved meeting and agent workflows, and visual refinements including the sidebar status glow.
+
+## In-app updates
+
+This is the first build with in-app updates. Tervy checks for new releases and marks the Settings gear when one is available. Open Settings to check manually or install an update. Tervy asks before stopping running sessions for installation.
+
+If you have an earlier Tervy build, replace it with this DMG once. Later releases can be installed from the app.
+
+## Install
+
+Download `Tervy-0.1.7-macos-arm64.dmg`, open it, and drag Tervy to Applications. Quit an older Tervy build before replacing it. Existing local data is migrated on first launch; back up important data before upgrading.
+
+Coding agents are optional and require their own CLIs and sign-in. Meeting recording is experimental and requires macOS 26 or later.
+
+See the [README](https://github.com/jringeisen/tervy#readme) for setup, backup, and support details.
+]]></description>
+            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.7/Tervy-0.1.7-macos-arm64.dmg" length="14632919" type="application/octet-stream" sparkle:edSignature="fvOc80r4oDe29whWGKU1zh1nreQAGHQ3qrAfqrrIFy/ByETURB51sNYoVJXWXJ1qKCmY9X8BqYXOauaMdRezCw=="></enclosure>
+        </item>
+    </channel>
+</rss><!-- sparkle-signatures:
+edSignature: RBnqfvAnYqnbJe9gRZZt9xluwVzMAGdIEQz4GZD4tAUl/hIpciyfI/cVNSWwCdJryLCUjtDGM+i5jSd2kpNQDA==
+length: 2382
+-->
