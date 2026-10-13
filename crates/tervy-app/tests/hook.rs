@@ -64,16 +64,12 @@ fn helper_projects_large_payload_without_gui_and_always_exits_zero() {
 fn codex_notify_chains_original_payload_even_without_ipc() {
     let folder = std::env::temp_dir().join(format!("tervy-notify-{}", std::process::id()));
     std::fs::create_dir_all(&folder).unwrap();
-    let callback = folder.join("callback.py");
+    let callback = folder.join("callback.sh");
     let result = folder.join("payload.json");
-    std::fs::write(
-        &callback,
-        "import pathlib,sys\npathlib.Path(sys.argv[1]).write_text(sys.argv[-1])\n",
-    )
-    .unwrap();
+    std::fs::write(&callback, "#!/bin/sh\nprintf '%s' \"$2\" > \"$1\"\n").unwrap();
     let payload = r#"{ "type":"agent-turn-complete", "thread-id":"10000000-0000-4000-8000-000000000001", "last-assistant-message":"synthetic fixture" }"#;
     let argv = format!(
-        "[\"/usr/bin/python3\",\"{}\",\"{}\"]",
+        "[\"/bin/sh\",\"{}\",\"{}\"]",
         callback.display(),
         result.display()
     );
