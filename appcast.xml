@@ -1,8 +1,37 @@
-<?xml version="1.0" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" standalone="yes"?>
+<!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
         <title>Tervy</title>
+        <item>
+            <title>0.1.8</title>
+            <pubDate>Tue, 13 Oct 2026 17:51:35 -0500</pubDate>
+            <sparkle:version>0.1.8</sparkle:version>
+            <sparkle:shortVersionString>0.1.8</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Tervy 0.1.8
+
+This update makes the sidebar match light mode. Its background, project panels,
+selected rows, dividers, section icons, and labels now use light colors with
+readable contrast. Dark mode keeps its existing appearance.
+
+## Install or update
+
+If you already have Tervy 0.1.7, open **Settings** when the update badge appears
+and choose **Install update**. Tervy asks before stopping running sessions.
+
+For a new installation, download the Apple Silicon DMG from this release, open it,
+and drag Tervy to Applications. Tervy supports Apple Silicon Macs running macOS
+15 or later. Experimental meeting recording requires macOS 26 or later.
+
+See the [README](https://github.com/jringeisen/tervy#readme) for your first
+project and optional coding agent setup.
+]]></description>
+            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.8/Tervy-0.1.8-macos-arm64.dmg" length="14623896" type="application/octet-stream" sparkle:edSignature="Jm7lc+zobTrFIKiJFvfyPhcFN8Bi1SA38Y5knDwpMhgMCTpqeAeEGDZnfAVS+C5xYqN5CB1O3WhaokeKWj4FCQ=="/>
+        </item>
         <item>
             <title>0.1.7</title>
             <pubDate>Tue, 13 Oct 2026 15:47:20 -0500</pubDate>
@@ -30,10 +59,11 @@ Coding agents are optional and require their own CLIs and sign-in. Meeting recor
 
 See the [README](https://github.com/jringeisen/tervy#readme) for setup, backup, and support details.
 ]]></description>
-            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.7/Tervy-0.1.7-macos-arm64.dmg" length="14632919" type="application/octet-stream" sparkle:edSignature="fvOc80r4oDe29whWGKU1zh1nreQAGHQ3qrAfqrrIFy/ByETURB51sNYoVJXWXJ1qKCmY9X8BqYXOauaMdRezCw=="></enclosure>
+            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.7/Tervy-0.1.7-macos-arm64.dmg" length="14632919" type="application/octet-stream" sparkle:edSignature="fvOc80r4oDe29whWGKU1zh1nreQAGHQ3qrAfqrrIFy/ByETURB51sNYoVJXWXJ1qKCmY9X8BqYXOauaMdRezCw=="/>
         </item>
     </channel>
-</rss><!-- sparkle-signatures:
-edSignature: RBnqfvAnYqnbJe9gRZZt9xluwVzMAGdIEQz4GZD4tAUl/hIpciyfI/cVNSWwCdJryLCUjtDGM+i5jSd2kpNQDA==
-length: 2382
+</rss>
+<!-- sparkle-signatures:
+edSignature: 8/A0M2+xb88C4rBuBqukQixHONkMW09vbyhl60KOU9Z+/WH67Ft43seR4LPiOTvpzQUDBwUhUII8kBAqKJ/LCw==
+length: 3911
 -->

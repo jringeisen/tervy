@@ -10,7 +10,7 @@ meeting recorder requires macOS 26 or later. Tervy is currently a public beta.
 ## Install Tervy
 
 1. Open the [latest Tervy release](https://github.com/jringeisen/tervy/releases/latest)
-   and download the `.dmg` file for Apple Silicon.
+   and follow its Apple Silicon `.dmg` download link.
 2. Open the downloaded disk image and drag **Tervy** to **Applications**.
 3. Open **Tervy** from Applications. You do not need to build anything or install
    a coding agent to get started.

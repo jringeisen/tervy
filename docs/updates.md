@@ -16,7 +16,8 @@ so they show no update controls.
 3. Make `github.com/jringeisen/tervy` public before the first updater release.
    Use `https://raw.githubusercontent.com/jringeisen/tervy/main/appcast.xml` as
    `TERVY_UPDATE_FEED_URL`. This stable URL serves the signed feed from `main`.
-   Each versioned DMG is hosted on its matching `vVERSION` GitHub Release.
+   Each versioned DMG needs a stable public HTTPS download URL. GitHub Release
+   assets are the usual location.
    The feed URL and public key are embedded in each public app bundle.
 
 ## Every release
@@ -29,18 +30,20 @@ so they show no update controls.
 3. Copy `target/releases/Tervy-VERSION-macos-arm64.dmg` to the directory of
    public update archives, for example `target/update-feed/`. Optionally add
    `Tervy-VERSION-macos-arm64.md` in the same directory for release notes.
-   Upload the DMG and checksum to a public GitHub Release tagged `vVERSION`
-   before publishing the feed. You may keep older archives locally for rollback;
-   the feed generator reads only the current archive and preserves prior feed
-   entries.
+   Publish the DMG and checksum at a stable public HTTPS URL before publishing
+   the feed. If the files are GitHub Release assets, the default download URL
+   works. For another host, set `TERVY_UPDATE_DOWNLOAD_PREFIX` to the HTTPS
+   directory URL ending in `/` when running `scripts/update-feed.sh`. You may
+   keep older archives locally for rollback. The feed generator reads only the
+   current archive and preserves prior feed entries.
 4. Run `scripts/update-feed.sh target/update-feed`. This invokes Sparkle's
    `generate_appcast` using the private key in the `tervy` Keychain account and
    signs the update and feed. It preserves prior items from the root
-   `appcast.xml`, puts the new item's download URL under its versioned GitHub
-   Release, verifies the signature, and copies the feed to the repo root. A
-   secure CI job may instead supply an ephemeral
-   private-key file through `TERVY_SPARKLE_KEY_FILE`; delete it after signing.
-5. Commit and push `appcast.xml` after the GitHub Release asset is available.
+   `appcast.xml`, points the new item to its public download location, verifies
+   the signature, and copies the feed to the repo root. A secure CI job may
+   instead supply an ephemeral private-key file through
+   `TERVY_SPARKLE_KEY_FILE`; delete it after signing.
+5. Commit and push `appcast.xml` after the public archive is available.
    Verify the public appcast URL and an older signed Tervy build can download
    and install the new version. Check that active sessions receive the
    stop-and-update confirmation and saved state reopens.
