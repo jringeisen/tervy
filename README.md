@@ -1,5 +1,12 @@
 # Tervy
 
+<p align="center">
+<a href="https://github.com/jringeisen/tervy/actions/workflows/ci.yml"><img src="https://github.com/jringeisen/tervy/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build Status"></a>
+<a href="https://github.com/jringeisen/tervy/releases"><img src="https://img.shields.io/github/downloads/jringeisen/tervy/total" alt="Total Downloads"></a>
+<a href="https://github.com/jringeisen/tervy/releases/latest"><img src="https://img.shields.io/github/v/release/jringeisen/tervy" alt="Latest Stable Version"></a>
+<a href="https://github.com/jringeisen/tervy/blob/main/LICENSE"><img src="https://img.shields.io/github/license/jringeisen/tervy" alt="License"></a>
+</p>
+
 Tervy is a Mac workspace for your projects, terminals, development commands, and
 coding agents. Keep a shell or dev server running while you switch projects, and
 come back to your sessions later. Coding agents are optional.
