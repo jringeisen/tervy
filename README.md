@@ -4,7 +4,7 @@
 <a href="https://github.com/jringeisen/tervy/actions/workflows/ci.yml"><img src="https://github.com/jringeisen/tervy/actions/workflows/ci.yml/badge.svg?branch=main" alt="Build Status"></a>
 <a href="https://github.com/jringeisen/tervy/releases"><img src="https://img.shields.io/github/downloads/jringeisen/tervy/total" alt="Total Downloads"></a>
 <a href="https://github.com/jringeisen/tervy/releases/latest"><img src="https://img.shields.io/github/v/release/jringeisen/tervy" alt="Latest Stable Version"></a>
-<a href="https://github.com/jringeisen/tervy/blob/main/LICENSE"><img src="https://img.shields.io/github/license/jringeisen/tervy" alt="License"></a>
+<a href="https://github.com/jringeisen/tervy/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT"></a>
 </p>
 
 Tervy is a Mac workspace for your projects, terminals, development commands, and
