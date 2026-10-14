@@ -6,7 +6,7 @@
 
 The original logos, wordmarks, app icons, identity source, and other artwork in
 this directory are reserved for the official Tervy project and excluded from
-the repository's Apache-2.0 grant. You may use them to build and redistribute
+the repository's MIT grant. You may use them to build and redistribute
 an unmodified Tervy release and to accurately refer to Tervy. A modified fork
 must use its own name and visual identity. Ask the maintainer before reusing
 Tervy artwork for another product.

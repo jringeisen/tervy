@@ -1,7 +1,7 @@
 # Tervy v1 product review and release plan
 
 Status: working plan for an open source v1. Product decisions confirmed by the
-maintainer: the primary user is a solo developer; Tervy's code uses Apache-2.0;
+maintainer: the primary user is a solo developer; Tervy's code uses MIT;
 the official brand assets are reserved; meeting recording is experimental in v1.
 The core supports Apple Silicon macOS 15+; meetings require macOS 26+.
 This review is based on the current implementation, documentation, automated
@@ -115,7 +115,7 @@ macOS 26 and the [manual beta workflow](https://github.com/jringeisen/tervy/acti
 built, verified, and uploaded a private review DMG. The M7 performance and crash
 limits remain recorded in [m7-review.md](m7-review.md).
 
-The first implementation pass added Apache-2.0 and brand terms, participation
+The first implementation pass added Apache-2.0 (now MIT) and brand terms, participation
 docs and PR CI, process editing, an offline backup/restore tool, OS and meeting
 boundaries, transcript delivery choice, and release checks. The local review
 DMG builds and verifies on macOS 27. These are implementation checks; the

@@ -22,7 +22,7 @@ does not complete every v1 product and data safety check.
 ## Candidate
 
 - [ ] Pin a version and commit; run `./scripts/check.sh` and PR CI.
-- [ ] Check vendored notices, Apache-2.0 license, reserved brand terms,
+- [ ] Check vendored notices, MIT license, reserved brand terms,
   contribution, support, and private security reporting paths.
 - [ ] Confirm GitHub repository visibility and enable private vulnerability
   reporting before inviting public security reports.

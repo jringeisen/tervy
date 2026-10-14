@@ -38,5 +38,5 @@ exceptions = [
 ]
 
 [licenses.private]
-# Our own crates are unpublished and carry no license yet.
+# Our own crates are unpublished and use the workspace MIT license.
 ignore = true

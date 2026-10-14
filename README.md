@@ -81,7 +81,7 @@ source-code push alone does not install a new version on your Mac.
 - [Release notes](https://github.com/jringeisen/tervy/releases) — downloads and
   changes in each version.
 
-Tervy's application code is [Apache-2.0 licensed](LICENSE). Original Tervy
+Tervy's application code is [MIT licensed](LICENSE). Original Tervy
 brand assets have separate [usage terms](assets/brand/README.md#asset-rights),
 and vendored dependencies retain their own licenses and attribution in
 [vendor/README.md](vendor/README.md).

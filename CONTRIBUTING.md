@@ -39,7 +39,7 @@ Native UI and signed-package checks have separate acceptance steps in the
   [vendor/README.md](vendor/README.md) before modifying a pinned dependency.
 
 Contributions to Tervy's code and documentation are accepted under the
-[Apache-2.0 license](LICENSE). The official [brand assets](assets/brand/README.md#asset-rights)
+[MIT license](LICENSE). The official [brand assets](assets/brand/README.md#asset-rights)
 have separate usage terms. Forks should use their own name and visual identity.
 
 For a bug, use a GitHub issue with reproduction steps and expected behavior.
