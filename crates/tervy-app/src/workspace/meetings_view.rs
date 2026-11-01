@@ -384,7 +384,6 @@ impl Workspace {
                     .child(if self.meeting_notes_editing {
                         Textarea::new(&self.meeting_notes_input)
                             .aria_label("Meeting notes")
-                            .h(px(260.))
                             .into_any_element()
                     } else {
                         div()

@@ -304,11 +304,10 @@ impl Workspace {
                     .child(modal_input(&self.note_modal_title_input, "Note title")),
             )
             .child(
-                v_flex().gap_2().child(div().text_sm().child("Note")).child(
-                    Textarea::new(&self.note_modal_body_input)
-                        .aria_label("Note body")
-                        .h(px(220.)),
-                ),
+                v_flex()
+                    .gap_2()
+                    .child(div().text_sm().child("Note"))
+                    .child(Textarea::new(&self.note_modal_body_input).aria_label("Note body")),
             );
         if let Some(error) = &self.note_modal_error {
             panel = panel.child(
@@ -507,11 +506,7 @@ impl Workspace {
                     v_flex()
                         .gap_2()
                         .child(div().text_xs().font_semibold().child("PROMPT TEXT"))
-                        .child(
-                            Textarea::new(&self.note_body_input)
-                                .aria_label("Note body")
-                                .h(px(320.)),
-                        ),
+                        .child(Textarea::new(&self.note_body_input).aria_label("Note body")),
                 )
                 .child(
                     h_flex()

@@ -248,28 +248,41 @@ impl Workspace {
         let note_search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search titles and text"));
         let note_title_input = cx.new(|cx| InputState::new(window, cx).placeholder("Note title"));
-        let note_body_input =
-            cx.new(|cx| TextareaState::new(window, cx).placeholder("Write a note…"));
+        // Size long-form fields by wrapped content, with a cap for large documents.
+        let note_body_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(6, 30)
+                .placeholder("Write a note…")
+        });
         let note_modal_title_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Note title"));
-        let note_modal_body_input =
-            cx.new(|cx| TextareaState::new(window, cx).placeholder("Write a note…"));
+        let note_modal_body_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(4, 12)
+                .placeholder("Write a note…")
+        });
         let skill_search_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Search skills"));
         let skill_name_input = cx.new(|cx| InputState::new(window, cx).placeholder("skill-name"));
         let skill_content_input = cx.new(|cx| {
-            TextareaState::new(window, cx).placeholder(
+            TextareaState::new(window, cx).auto_grow(6, 30).placeholder(
                 "---\nname: skill-name\ndescription: When to use this skill\n---\n\nInstructions",
             )
         });
-        let skill_file_input =
-            cx.new(|cx| TextareaState::new(window, cx).placeholder("Supporting file text"));
+        let skill_file_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(4, 30)
+                .placeholder("Supporting file text")
+        });
         let skill_file_name_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("references/notes.md"));
         let meeting_title_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("Meeting title"));
-        let meeting_notes_input =
-            cx.new(|cx| TextareaState::new(window, cx).placeholder("Meeting notes"));
+        let meeting_notes_input = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(6, 30)
+                .placeholder("Meeting notes")
+        });
         let note_search_subscription =
             cx.subscribe_in(&note_search_input, window, |this, _, event, _, cx| {
                 if matches!(event, InputEvent::Change | InputEvent::PressEnter { .. }) {

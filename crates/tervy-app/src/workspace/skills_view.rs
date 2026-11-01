@@ -475,8 +475,7 @@ impl Workspace {
                 .child(
                     Textarea::new(&self.skill_content_input)
                         .aria_label("SKILL.md content")
-                        .disabled(read_only)
-                        .h(px(360.)),
+                        .disabled(read_only),
                 )
                 .when(!read_only, |editor| {
                     editor.child(
@@ -547,8 +546,7 @@ impl Workspace {
                         .child(
                             Textarea::new(&self.skill_file_input)
                                 .aria_label("Supporting file text")
-                                .disabled(read_only)
-                                .h(px(240.)),
+                                .disabled(read_only),
                         );
                     if !read_only {
                         editor = editor.child(
