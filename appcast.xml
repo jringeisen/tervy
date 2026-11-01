@@ -6,6 +6,34 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Tervy</title>
         <item>
+            <title>0.1.9</title>
+            <pubDate>Sun, 01 Nov 2026 11:30:05 -0600</pubDate>
+            <sparkle:version>0.1.9</sparkle:version>
+            <sparkle:shortVersionString>0.1.9</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Tervy 0.1.9
+
+Text areas now grow and shrink to fit their content, including wrapped lines.
+This applies to note content, the new-note dialog, skill content, supporting
+files, and meeting notes. Very long content remains scrollable once the field
+reaches its height limit.
+
+## Install or update
+
+Open **Settings** in Tervy and check for updates, then choose **Install update**.
+Tervy asks before stopping running sessions.
+
+For a new installation, download the Apple Silicon DMG from this release, open it,
+and drag Tervy to Applications. Tervy supports Apple Silicon Macs running macOS
+15 or later. Experimental meeting recording requires macOS 26 or later.
+
+See the [README](https://github.com/jringeisen/tervy#readme) for your first
+project and optional coding agent setup.
+]]></description>
+            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.9/Tervy-0.1.9-macos-arm64.dmg" length="14627337" type="application/octet-stream" sparkle:edSignature="61afqad6/1Ct8HB68y364DWcCc1kalXZdqEtrDMktG4M5GpmxuvLD6JOVmXpNDnHLNO1BThPP4V7iIkPdoqbCA=="/>
+        </item>
+        <item>
             <title>0.1.8</title>
             <pubDate>Tue, 13 Oct 2026 17:51:35 -0500</pubDate>
             <sparkle:version>0.1.8</sparkle:version>
@@ -64,6 +92,6 @@ See the [README](https://github.com/jringeisen/tervy#readme) for setup, backup, 
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 8/A0M2+xb88C4rBuBqukQixHONkMW09vbyhl60KOU9Z+/WH67Ft43seR4LPiOTvpzQUDBwUhUII8kBAqKJ/LCw==
-length: 3911
+edSignature: 6/R/qwaSBoVuaPkS+AFk65O57Q4SKxvbWQzzGlztiq5qSwbOSEb7yolao3eD83ywSCTAplIUR+nJYe2o+ZSBBw==
+length: 5460
 -->
