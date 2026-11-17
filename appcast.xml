@@ -6,6 +6,50 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Tervy</title>
         <item>
+            <title>0.1.10</title>
+            <pubDate>Mon, 16 Nov 2026 20:35:43 -0600</pubDate>
+            <sparkle:version>0.1.10</sparkle:version>
+            <sparkle:shortVersionString>0.1.10</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Tervy 0.1.10
+
+Tervy can now remind you to record a Microsoft Teams meeting. On macOS 26 or
+later, sustained audio activity from desktop Teams brings Tervy forward with a
+**Teams meeting detected** prompt, even when Tervy is hidden.
+
+Choose **Record…** to open the recording and notes options, or **Dismiss**
+(Escape) to skip that call. Reminders are enabled by default and can be turned
+off in **Settings → Teams meeting reminders**. Your preference is remembered.
+The detector does not capture audio, and nothing is recorded until you choose
+a recording option. Existing recordings suppress reminders.
+
+## Help test Teams detection
+
+This first version uses Teams microphone or speaker activity rather than a
+meeting API. Expect a reminder roughly 6–9 seconds after sustained activity
+begins. Muted meetings can be detected through speaker activity. Prejoin audio
+checks and other sustained Teams audio may also trigger a reminder. Teams in a
+browser is not detected. Use **Stop** to finish recording.
+
+Please try joining, muting, leaving, and rejoining a desktop Teams call, including
+with Tervy hidden. Report missed or repeated prompts through
+[GitHub Issues](https://github.com/jringeisen/tervy/issues), including your macOS
+and Teams versions. Avoid attaching private meeting audio or transcripts.
+
+## Install or update
+
+Open **Settings** in Tervy and check for updates, then choose **Install update**.
+Tervy asks before stopping running sessions.
+
+For a new installation, download the Apple Silicon DMG from this release, open it,
+and drag Tervy to Applications. Tervy supports Apple Silicon Macs running macOS
+15 or later. Experimental meeting recording and Teams reminders require macOS
+26 or later.
+]]></description>
+            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.10/Tervy-0.1.10-macos-arm64.dmg" length="14653964" type="application/octet-stream" sparkle:edSignature="b7cun+bDjXGgZLGn+Blso3FGDWXlJzvI1vDuT82CsmYHOMmVscusLqhXdMaJLBfQzq5JVPZoA9if0deVSApMAQ=="/>
+        </item>
+        <item>
             <title>0.1.9</title>
             <pubDate>Sun, 01 Nov 2026 11:30:05 -0600</pubDate>
             <sparkle:version>0.1.9</sparkle:version>
@@ -92,6 +136,6 @@ See the [README](https://github.com/jringeisen/tervy#readme) for setup, backup, 
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 6/R/qwaSBoVuaPkS+AFk65O57Q4SKxvbWQzzGlztiq5qSwbOSEb7yolao3eD83ywSCTAplIUR+nJYe2o+ZSBBw==
-length: 5460
+edSignature: 1X+d3btPIYTkD+sLRkD0fCW1vaqVrXlPUn5FIslpuoSgKPpleSr6brGb5dJVh5wZKQhZBs8sNb6v2YLpVkFHCQ==
+length: 7952
 -->
