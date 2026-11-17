@@ -9,6 +9,8 @@ pub struct Layout {
     pub sidebar_width: Option<f32>,
     #[serde(default)]
     pub sidebar_collapsed: bool,
+    #[serde(default)]
+    pub teams_reminders_disabled: bool,
     pub active_project: Option<String>,
     pub tabs: Vec<Tab>,
     pub selected: Vec<String>,
@@ -49,11 +51,13 @@ mod tests {
         let mut layout: Layout = serde_json::from_str(old).unwrap();
         assert_eq!(layout.sidebar_width, None);
         assert!(!layout.sidebar_collapsed);
+        assert!(!layout.teams_reminders_disabled);
         assert!(!layout.skills_expanded);
         assert!(!layout.notes_expanded);
         assert!(!layout.meetings_expanded);
         layout.sidebar_width = Some(340.);
         layout.sidebar_collapsed = true;
+        layout.teams_reminders_disabled = true;
         layout.skills_expanded = true;
         layout.notes_expanded = true;
         layout.meetings_expanded = true;

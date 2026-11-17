@@ -3,6 +3,113 @@ use gpui_kit::base::Disableable;
 use gpui_kit::component::text::TextView;
 
 impl Workspace {
+    pub(super) fn start_teams_monitor(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.teams_monitor_started || !self.perf_layout.is_empty() {
+            return;
+        }
+        self.teams_monitor_started = true;
+        self._tasks.push(cx.spawn_in(window, async move |view, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(3))
+                    .await;
+                let enabled = view
+                    .update(cx, |this, _| {
+                        !this.teams_reminders_disabled
+                            && this.shutdown.is_none()
+                            && this
+                                .readiness
+                                .as_ref()
+                                .is_some_and(|ready| ready.meetings_supported)
+                    })
+                    .unwrap_or(false);
+                if !enabled {
+                    continue;
+                }
+                let activity = cx
+                    .background_executor()
+                    .spawn(async { crate::teams::activity() })
+                    .await;
+                if cx
+                    .update(|window, cx| {
+                        view.update(cx, |this, cx| this.teams_activity(activity, window, cx))
+                    })
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }));
+    }
+
+    pub(super) fn teams_activity(
+        &mut self,
+        activity: Option<bool>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.teams_reminders_disabled || self.shutdown.is_some() {
+            return;
+        }
+        let ready = self.teams_detector.sample(activity);
+        if self.teams_detector.call_ended() && self.teams_prompt_open {
+            self.teams_prompt_open = false;
+            self.restore_focus(window, cx);
+            cx.notify();
+        }
+        if !ready {
+            return;
+        }
+        if self.active_recording().is_some() || self.meeting_record_choice {
+            self.teams_detector.acknowledge();
+            return;
+        }
+        // Defer until an existing dialog has closed, rather than covering it.
+        if self.restoring
+            || self.dialog_pending
+            || self.setup_open
+            || self.palette_open
+            || self.note_modal_open
+            || self.process_project.is_some()
+            || self.agent_launch.is_some()
+            || self.rename.is_some()
+            || self.question_parent.is_some()
+            || self.customization_provider.is_some()
+            || self.customization_preview.is_some()
+        {
+            return;
+        }
+        self.teams_detector.acknowledge();
+        self.teams_prompt_open = true;
+        window.activate_window();
+        cx.activate(true);
+        self.focus.focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn teams_recording_prompt(&self, cx: &Context<Self>) -> AnyElement {
+        div().absolute().inset_0().occlude().bg(hsla(0., 0., 0., 0.3))
+            .flex().justify_center().items_center()
+            .child(dialog_panel(500., cx.theme())
+                .child(div().font_semibold().child("Teams meeting detected"))
+                .child(div().text_sm().child("Teams has ongoing audio activity. Would you like to record this meeting?"))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground)
+                    .child("Nothing is recorded until you choose a recording option. You can turn off Teams reminders in Settings."))
+                .child(h_flex().gap_3()
+                    .child(Button::new("teams-start-recording").primary().label("Record…")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.teams_prompt_open = false;
+                            this.record_meeting(window, cx);
+                        })))
+                    .child(Button::new("teams-dismiss").ghost().label("Dismiss")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.teams_prompt_open = false;
+                            this.restore_focus(window, cx);
+                            cx.notify();
+                        })))))
+            .into_any_element()
+    }
+
     pub(super) fn open_meetings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.meetings_open = true;
         self.meetings_expanded = true;

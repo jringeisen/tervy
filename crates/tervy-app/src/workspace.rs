@@ -14,6 +14,7 @@ mod sidebar_navigation;
 mod sidebar_smoke;
 mod skills_smoke;
 mod skills_view;
+mod teams_smoke;
 use crate::terminal_view::TerminalView;
 use chrono::{Local, TimeZone};
 use gpui_kit::base::Disableable as _;
@@ -158,6 +159,10 @@ pub struct Workspace {
     meeting_selected: Option<String>,
     meeting_error: Option<String>,
     meeting_record_choice: bool,
+    teams_reminders_disabled: bool,
+    teams_detector: crate::teams::Detector,
+    teams_monitor_started: bool,
+    teams_prompt_open: bool,
     meeting_timer_running: bool,
     meeting_title_input: Entity<InputState>,
     meeting_notes_input: Entity<TextareaState>,
@@ -398,6 +403,10 @@ impl Workspace {
                     this.smoke_skills(window, cx);
                     return;
                 }
+                if this.perf_layout == "teams" {
+                    this.smoke_teams(window, cx);
+                    return;
+                }
                 if this.perf_layout == "notes" {
                     this.smoke_notes(window, cx);
                     return;
@@ -515,6 +524,10 @@ impl Workspace {
             meeting_selected: None,
             meeting_error: None,
             meeting_record_choice: false,
+            teams_reminders_disabled: false,
+            teams_detector: crate::teams::Detector::default(),
+            teams_monitor_started: false,
+            teams_prompt_open: false,
             meeting_timer_running: false,
             meeting_title_input,
             meeting_notes_input,
@@ -1016,6 +1029,7 @@ impl Workspace {
                         .clamp(220., 520.);
                     self.sidebar_state = cx.new(|_| ResizableState::default());
                     self.sidebar_collapsed = layout.sidebar_collapsed;
+                    self.teams_reminders_disabled = layout.teams_reminders_disabled;
                     self.expanded = layout.expanded.into_iter().collect();
                     self.skills_expanded = layout.skills_expanded;
                     self.notes_expanded = layout.notes_expanded;
@@ -1036,6 +1050,7 @@ impl Workspace {
                     }
                 }
                 self.restoring = false;
+                self.start_teams_monitor(window, cx);
                 self.refresh_skills(cx);
                 self.refresh_notes(cx);
                 self.core.send(CoreCommand::ListMeetings);
@@ -1927,6 +1942,7 @@ impl Workspace {
             },
             active_project: self.active_project.clone(),
             sidebar_collapsed: self.sidebar_collapsed,
+            teams_reminders_disabled: self.teams_reminders_disabled,
             expanded: self.expanded.iter().cloned().collect(),
             skills_expanded: self.skills_expanded,
             notes_expanded: self.notes_expanded,
@@ -4654,7 +4670,12 @@ impl Render for Workspace {
             .track_focus(&self.focus)
             .key_context("Workspace")
             .capture_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                if event.keystroke.key == "escape" && this.note_modal_open {
+                if event.keystroke.key == "escape" && this.teams_prompt_open {
+                    this.teams_prompt_open = false;
+                    this.restore_focus(window, cx);
+                    cx.stop_propagation();
+                    cx.notify();
+                } else if event.keystroke.key == "escape" && this.note_modal_open {
                     this.cancel_new_note_modal(window, cx);
                     cx.stop_propagation();
                 } else if event.keystroke.key == "escape" && this.setup_open {
@@ -4927,6 +4948,9 @@ impl Render for Workspace {
         }
         if self.process_project.is_some() {
             body = body.child(self.process_form(cx));
+        }
+        if self.teams_prompt_open {
+            body = body.child(self.teams_recording_prompt(cx));
         }
         if self.meeting_record_choice {
             body = body.child(self.meeting_record_dialog(cx));

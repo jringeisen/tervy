@@ -7,6 +7,7 @@ mod microphone;
 mod panic_reporter;
 mod perf;
 mod setup;
+mod teams;
 mod terminal_element;
 mod terminal_perf;
 mod terminal_view;

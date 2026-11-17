@@ -95,6 +95,21 @@ If capture reports a permission error, open System Settings → Privacy & Securi
 Screen & System Audio Recording and allow Tervy Meeting Audio (or Tervy) to
 record system audio. Also check Microphone access there, then quit and reopen
 Tervy before retrying.
+On macOS 26+, **Teams meeting reminders** are enabled by default. While Tervy
+is running, sustained microphone or speaker activity from desktop Microsoft Teams
+brings Tervy forward with a **Teams meeting detected** prompt, even if Tervy is
+hidden. Choose **Record…** to select your recording and notes option, or
+**Dismiss** (Escape) to skip that call. No audio is captured by the detector.
+Disable or re-enable reminders in **Settings → Teams meeting reminders**; the
+choice is remembered across launches.
+
+Detection uses audio activity, rather than a Teams meeting API. It waits roughly
+6–9 seconds before prompting and requires about 30 seconds without Teams audio
+before treating activity as a new call. Muted meetings can be detected through
+Teams speaker activity. Prejoin audio checks or other sustained Teams audio can
+also trigger a reminder. Browser meetings are not detected. Existing recordings
+suppress reminders, and you still use **Stop** to finish a recording.
+
 On-device transcription requires macOS 26 or later and a supported language.
 If selected, the transcript is sent to that AI provider through its agent CLI to
 generate notes. Agents you launch with Tervy's meeting tools can read Library

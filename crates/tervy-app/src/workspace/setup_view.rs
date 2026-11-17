@@ -183,6 +183,18 @@ impl Workspace {
             }
             content = content.child(updates);
         }
+        content = content.child(v_flex().gap_2().pt_4().border_t_1().border_color(theme.border)
+            .child(div().text_sm().font_semibold().child("Teams meeting reminders"))
+            .child(div().text_sm().child("Bring Tervy forward and ask to record when desktop Teams has ongoing audio activity. Recording requires macOS 26+."))
+            .child(Button::new("toggle-teams-reminders").ghost()
+                .label(if self.teams_reminders_disabled { "Enable Teams reminders" } else { "Disable Teams reminders" })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.teams_reminders_disabled = !this.teams_reminders_disabled;
+                    this.teams_detector = crate::teams::Detector::default();
+                    this.teams_prompt_open = false;
+                    this.save_layout();
+                    cx.notify();
+                }))));
         content = content
             .child(v_flex().gap_3()
                 .child(welcome_step("Projects", "Use + beside Projects to add a local folder. Switch projects in the sidebar; each keeps its own sessions."))
