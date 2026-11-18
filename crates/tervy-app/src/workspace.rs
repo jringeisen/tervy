@@ -173,6 +173,7 @@ pub struct Workspace {
     note_selected: Option<String>,
     note_loaded: Option<notes::Note>,
     note_new: bool,
+    note_editing: bool,
     note_saving: bool,
     note_error: Option<String>,
     note_search_input: Entity<InputState>,
@@ -538,6 +539,7 @@ impl Workspace {
             note_selected: None,
             note_loaded: None,
             note_new: false,
+            note_editing: false,
             note_saving: false,
             note_error: None,
             note_search_input,
@@ -880,7 +882,7 @@ impl Workspace {
                 }
             }
             CoreEvent::NoteRead { id, note } => {
-                if self.note_selected.as_ref() != Some(&id) {
+                if self.note_selected.as_ref() != Some(&id) || self.note_loaded.is_some() {
                     return;
                 }
                 if let Some(note) = note {
@@ -897,15 +899,20 @@ impl Workspace {
                     self.note_modal_error = None;
                     self.restore_focus(window, cx);
                 }
-                let should_load = (from_ui && self.note_saving)
+                let saved_editor = from_ui && self.note_saving;
+                let should_load = saved_editor
                     || (self.note_selected.as_ref() == Some(&note.id) && !self.note_is_dirty(cx));
                 if from_ui {
                     self.note_saving = false;
                 }
                 if should_load {
-                    self.note_selected = Some(note.id.clone());
-                    self.note_new = false;
                     self.load_note(note, window, cx);
+                    if saved_editor {
+                        self.note_editing = false;
+                        if self.notes_open {
+                            self.restore_focus(window, cx);
+                        }
+                    }
                 } else if self.note_selected.as_ref() == Some(&note.id) {
                     self.note_error = Some(
                         "This note changed in an agent. Save your draft elsewhere, then reload it."
@@ -922,6 +929,7 @@ impl Workspace {
                     self.note_selected = None;
                     self.note_loaded = None;
                     self.note_new = keep_draft;
+                    self.note_editing = false;
                     if keep_draft {
                         self.note_error = Some(
                             "The saved note was deleted. You can save this draft as a new note."

@@ -15,7 +15,7 @@ impl Workspace {
         let note = notes::Note {
             id: id.clone(),
             title: "Draft idea".into(),
-            body: "Original".into(),
+            body: "## Original\n\n- A **Markdown** bullet".into(),
             revision: 1,
             updated_at: 1,
         };
@@ -43,6 +43,18 @@ impl Workspace {
             window,
             cx,
         );
+        assert!(!self.note_editing && !self.note_is_dirty(cx));
+        self.edit_note(window, cx);
+        assert!(self.note_editing);
+        assert!(
+            self.note_body_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+        self.discard_note_changes(window, cx);
+        assert!(!self.note_editing && !self.note_is_dirty(cx));
+        self.edit_note(window, cx);
         self.note_body_input
             .update(cx, |input, cx| input.set_value("Local draft", window, cx));
         assert!(self.note_is_dirty(cx));
@@ -66,7 +78,7 @@ impl Workspace {
         self.click_sidebar_row(SidebarRow::Notes, window, cx);
         assert!(self.note_loaded.is_some() && self.note_is_dirty(cx));
         self.discard_note_changes(window, cx);
-        assert!(!self.note_is_dirty(cx));
+        assert!(!self.note_editing && !self.note_is_dirty(cx));
         self.click_sidebar_row(SidebarRow::Notes, window, cx);
         assert!(self.note_loaded.is_none() && self.note_selected.is_none());
         assert_eq!(self.sidebar_cursor, Some(SidebarRow::Notes));
@@ -96,7 +108,7 @@ impl Workspace {
                     assert_eq!(this.note_title_input.read(cx).value().as_ref(), "New idea");
                     this.cancel_new_note_modal(window, cx);
                     assert!(!this.note_modal_open && this.note_new && this.note_is_dirty(cx));
-                    eprintln!("tervy-notes-smoke PASS sidebar=true parent_navigation=true draft_guard=true drafts=true conflict=true modal=true narrow_window=true");
+                    eprintln!("tervy-notes-smoke PASS sidebar=true parent_navigation=true preview=true edit_focus=true draft_guard=true drafts=true conflict=true modal=true narrow_window=true");
                     cx.quit();
                 });
             });

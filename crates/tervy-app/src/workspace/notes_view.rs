@@ -1,13 +1,18 @@
 use super::*;
 use gpui_kit::assets::IconName as AssetIconName;
 use gpui_kit::base::Disableable;
+use gpui_kit::component::text::TextView;
 
 impl Workspace {
     pub(super) fn search_notes(&mut self, cx: &mut Context<Self>) {
-        if !self.note_search_input.read(cx).value().trim().is_empty() && !self.note_is_dirty(cx) {
+        if !self.note_search_input.read(cx).value().trim().is_empty()
+            && !self.note_is_dirty(cx)
+            && !self.note_saving
+        {
             self.note_selected = None;
             self.note_loaded = None;
             self.note_new = false;
+            self.note_editing = false;
         }
         self.notes.clear();
         self.note_next_offset = None;
@@ -59,6 +64,7 @@ impl Workspace {
         self.note_selected = None;
         self.note_loaded = None;
         self.note_new = false;
+        self.note_editing = false;
         self.note_error = None;
         self.note_search_input
             .update(cx, |input, cx| input.focus(window, cx));
@@ -97,7 +103,8 @@ impl Workspace {
     }
 
     pub(super) fn select_note(&mut self, id: String, window: &mut Window, cx: &mut Context<Self>) {
-        if self.note_selected.as_ref() == Some(&id) && self.note_is_dirty(cx) {
+        let has_pending_changes = self.note_is_dirty(cx) || self.note_saving;
+        if self.note_selected.as_ref() == Some(&id) && has_pending_changes {
             self.notes_open = true;
             self.skills_open = false;
             self.meetings_open = false;
@@ -106,7 +113,7 @@ impl Workspace {
             cx.notify();
             return;
         }
-        if self.note_selected.as_ref() != Some(&id) && self.note_is_dirty(cx) {
+        if has_pending_changes {
             self.note_error =
                 Some("Save or discard your changes before opening another note".into());
             cx.notify();
@@ -117,15 +124,24 @@ impl Workspace {
         self.meetings_open = false;
         self.notes_expanded = true;
         self.note_selected = Some(id.clone());
+        self.note_loaded = None;
         self.note_new = false;
+        self.note_editing = false;
         self.note_error = None;
         self.core.send(CoreCommand::ReadNote(id));
         self.update_visibility(window, cx);
         cx.notify();
     }
 
+    pub(super) fn edit_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.note_editing = true;
+        self.note_body_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
     pub(super) fn new_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.note_is_dirty(cx) {
+        if self.note_is_dirty(cx) || self.note_saving {
             self.note_error =
                 Some("Save or discard your changes before creating another note".into());
             cx.notify();
@@ -138,6 +154,7 @@ impl Workspace {
         self.note_selected = None;
         self.note_loaded = None;
         self.note_new = true;
+        self.note_editing = false;
         self.note_error = None;
         self.note_title_input
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -150,6 +167,7 @@ impl Workspace {
     }
 
     pub(super) fn discard_note_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.note_editing = false;
         if let Some(note) = self.note_loaded.clone() {
             self.load_note(note, window, cx);
         } else {
@@ -161,6 +179,7 @@ impl Workspace {
                 .update(cx, |input, cx| input.set_value("", window, cx));
             self.note_error = None;
         }
+        self.restore_focus(window, cx);
         cx.notify();
     }
 
@@ -358,6 +377,8 @@ impl Workspace {
     pub(super) fn notes_content(&self, cx: &Context<Self>) -> AnyElement {
         let theme = cx.theme();
         let selected = self.note_loaded.as_ref();
+        let editing = self.note_editing || self.note_new;
+        let preview = selected.filter(|_| !editing);
         let query = self.note_search_input.read(cx).value().to_string();
         let has_query = !query.trim().is_empty();
         let dirty = self.note_is_dirty(cx);
@@ -433,8 +454,8 @@ impl Workspace {
                             .child(status),
                     ),
             );
-        if selected.is_some() || self.note_new {
-            let editor = v_flex()
+        if selected.is_some() || editing {
+            let detail = v_flex()
                 .min_w_0()
                 .gap_4()
                 .p_4()
@@ -447,8 +468,16 @@ impl Workspace {
                         .items_center()
                         .justify_between()
                         .gap_2()
-                        .child(
+                        .child(if let Some(note) = preview {
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .text_lg()
+                                .font_semibold()
+                                .child(note.title.clone())
+                        } else {
                             v_flex()
+                                .min_w_0()
                                 .gap_1()
                                 .child(div().text_sm().font_semibold().child(if self.note_new {
                                     "New note"
@@ -460,12 +489,30 @@ impl Workspace {
                                         .text_xs()
                                         .text_color(theme.muted_foreground)
                                         .child(if dirty { "Unsaved changes" } else { "Saved" }),
-                                ),
-                        )
+                                )
+                        })
                         .when(selected.is_some(), |header| {
                             header.child(
                                 h_flex()
+                                    .flex_shrink_0()
                                     .gap_1()
+                                    .when(!editing, |actions| {
+                                        actions.child(
+                                            Button::new("edit-note")
+                                                .small()
+                                                .ghost()
+                                                .icon(gpui_kit::component::Icon::default().data(
+                                                    include_bytes!(
+                                                        "../../../../assets/icons/pencil.svg"
+                                                    ),
+                                                ))
+                                                .tooltip("Edit note")
+                                                .accessibility_label("Edit note")
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.edit_note(window, cx)
+                                                })),
+                                        )
+                                    })
                                     .child(
                                         Button::new("copy-note")
                                             .small()
@@ -496,45 +543,73 @@ impl Workspace {
                             )
                         }),
                 )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_xs().font_semibold().child("TITLE"))
-                        .child(modal_input(&self.note_title_input, "Note title")),
-                )
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(div().text_xs().font_semibold().child("PROMPT TEXT"))
-                        .child(Textarea::new(&self.note_body_input).aria_label("Note body")),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
+                .when(editing, |detail| {
+                    detail
                         .child(
-                            Button::new("save-note")
-                                .small()
-                                .primary()
-                                .disabled(self.note_saving || !dirty)
-                                .label(if self.note_saving {
-                                    "Saving…"
-                                } else {
-                                    "Save"
-                                })
-                                .on_click(cx.listener(|this, _, _, cx| this.save_note(cx))),
+                            v_flex()
+                                .gap_2()
+                                .child(div().text_xs().font_semibold().child("TITLE"))
+                                .child(
+                                    Input::new(&self.note_title_input)
+                                        .aria_label("Note title")
+                                        .disabled(self.note_saving),
+                                ),
                         )
                         .child(
-                            Button::new("discard-note")
-                                .small()
-                                .ghost()
-                                .disabled(self.note_saving || (!self.note_new && !dirty))
-                                .label(if self.note_new { "Cancel" } else { "Discard" })
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.discard_note_changes(window, cx)
-                                })),
-                        ),
-                );
-            panel = panel.child(editor);
+                            v_flex()
+                                .gap_2()
+                                .child(div().text_xs().font_semibold().child("MARKDOWN"))
+                                .child(
+                                    Textarea::new(&self.note_body_input)
+                                        .aria_label("Note body")
+                                        .disabled(self.note_saving),
+                                ),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .child(
+                                    Button::new("save-note")
+                                        .small()
+                                        .primary()
+                                        .disabled(self.note_saving || !dirty)
+                                        .label(if self.note_saving {
+                                            "Saving…"
+                                        } else {
+                                            "Save"
+                                        })
+                                        .on_click(cx.listener(|this, _, _, cx| this.save_note(cx))),
+                                )
+                                .child(
+                                    Button::new("discard-note")
+                                        .small()
+                                        .ghost()
+                                        .disabled(self.note_saving)
+                                        .label(if self.note_new || !dirty {
+                                            "Cancel"
+                                        } else {
+                                            "Discard"
+                                        })
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.discard_note_changes(window, cx)
+                                        })),
+                                ),
+                        )
+                })
+                .when_some(preview, |detail, note| {
+                    detail.child(if note.body.trim().is_empty() {
+                        div()
+                            .text_sm()
+                            .text_color(theme.muted_foreground)
+                            .child("This note is empty.")
+                            .into_any_element()
+                    } else {
+                        TextView::markdown("note-preview", note.body.clone())
+                            .text_sm()
+                            .into_any_element()
+                    })
+                });
+            panel = panel.child(detail);
         } else {
             if self.notes.is_empty() {
                 panel = panel.child(
