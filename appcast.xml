@@ -6,6 +6,34 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
     <channel>
         <title>Tervy</title>
         <item>
+            <title>0.1.11</title>
+            <pubDate>Wed, 18 Nov 2026 13:27:59 -0600</pubDate>
+            <sparkle:version>0.1.11</sparkle:version>
+            <sparkle:shortVersionString>0.1.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>
+            <description sparkle:format="markdown"><![CDATA[# Tervy 0.1.11
+
+Saved notes in **Library → Notes** now open as rendered Markdown. Click the
+pencil icon next to the note title to edit the title or Markdown. **Save**
+shows the updated preview, and **Discard** returns to the last saved version.
+New notes open directly in the editor.
+
+To try it, create a note with a Markdown heading, a bulleted list, and a fenced
+code block. Save it, then use the pencil icon to make a change and save again.
+
+## Install or update
+
+In Tervy, choose **Settings → Check for updates → Install update**. Tervy asks
+before stopping running sessions. For a new installation, open the Apple Silicon
+DMG from this release and drag Tervy to Applications.
+
+Tervy supports Apple Silicon Macs on macOS 15 or later. Experimental meeting
+recording and Teams reminders require macOS 26 or later.
+]]></description>
+            <enclosure url="https://github.com/jringeisen/tervy/releases/download/v0.1.11/Tervy-0.1.11-macos-arm64.dmg" length="14658984" type="application/octet-stream" sparkle:edSignature="2sXcNeMm+h3RzIW0k2Y1h7ufkxZMq2j1qlDxFmOUZ4nz869m3VzgnnJeVtbi37qKlgYZtKVLachx4RsV3/KjBQ=="/>
+        </item>
+        <item>
             <title>0.1.10</title>
             <pubDate>Mon, 16 Nov 2026 20:35:43 -0600</pubDate>
             <sparkle:version>0.1.10</sparkle:version>
@@ -136,6 +164,6 @@ See the [README](https://github.com/jringeisen/tervy#readme) for setup, backup, 
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: 1X+d3btPIYTkD+sLRkD0fCW1vaqVrXlPUn5FIslpuoSgKPpleSr6brGb5dJVh5wZKQhZBs8sNb6v2YLpVkFHCQ==
-length: 7952
+edSignature: qhHDeLLHw4P1PSYy6HiKUxOUv5m1sjLnsqqnJeGpO7yj8CeLMGrfK5jAT0svjYgm8cwmymDzOrc+tPT2mwV2DA==
+length: 9550
 -->
